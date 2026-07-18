@@ -97,7 +97,7 @@ export class PisCoreStack extends cdk.Stack {
       actions: ["bedrock:InvokeModel"],
       resources: [
         `arn:aws:bedrock:us-east-1::foundation-model/amazon.titan-embed-text-v2:0`,
-        `arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-*`,
+        `arn:aws:bedrock:*::foundation-model/anthropic.claude-*`,
         `arn:aws:bedrock:us-east-1:${this.account}:inference-profile/*`,
       ],
     }));

@@ -38,7 +38,8 @@ cat > /tmp/pis-source-config.json <<EOF
         "PIS_S3_BUCKET": "$BUCKET",
         "PIS_DB_SSLMODE": "require",
         "PIS_PUBLIC_URL": "$PUBLIC_URL",
-        "PIS_EMBEDDINGS_ENABLED": "true"
+        "PIS_EMBEDDINGS_ENABLED": "true",
+        "PIS_EXTRACTION_MODEL": "us.anthropic.claude-haiku-4-5-20251001-v1:0"
       },
       "RuntimeEnvironmentSecrets": {
         "PIS_DB_SECRET": "$DB_SECRET",

@@ -21,4 +21,4 @@ class Settings(BaseSettings):
     embeddings_enabled: bool = False
     embedding_model: str = "amazon.titan-embed-text-v2:0"
     bedrock_region: str = "us-east-1"
-    extraction_model: str = "anthropic.claude-haiku-4-5-20251001-v1:0"
+    extraction_model: str = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
