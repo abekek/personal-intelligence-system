@@ -20,7 +20,7 @@ def test_extract_unsupported_returns_none():
 
 def test_ingest_file_roundtrip_and_dedupe(db, tmp_path):
     store = ObjectStore(tmp_path)
-    payload = ("EB-2 NIW evidence checklist\n" * 30).encode()
+    payload = ("Grant application evidence checklist\n" * 30).encode()
 
     result = ingest_file(db, store, payload, "checklist.txt",
                          source_meta={"origin": "test"})
@@ -34,7 +34,7 @@ def test_ingest_file_roundtrip_and_dedupe(db, tmp_path):
     rows = db.execute(sa.text(
         "SELECT text_content FROM artifact_chunks WHERE version_id = :v"),
         {"v": result.version_id}).fetchall()
-    assert rows and "NIW evidence" in rows[0][0]
+    assert rows and "evidence checklist" in rows[0][0]
 
 
 def test_ingest_unsupported_stores_binary(db, tmp_path):

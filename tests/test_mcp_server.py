@@ -65,7 +65,7 @@ def test_kb_capture_document(engine, db, tmp_path, monkeypatch):
     )
     tools = tools_of(engine)
     result = tools["kb_capture_document"](
-        "niw-strategy.md", "Recommendation letters: ask research collaborators first.",
+        "letter-strategy.md", "Recommendation letters: ask research collaborators first.",
         note="uploaded in claude.ai",
     )
     assert result["status"] == "created" and result["chunks"] == 1

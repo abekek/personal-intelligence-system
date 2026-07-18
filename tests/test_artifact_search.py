@@ -11,7 +11,7 @@ def test_uploaded_document_is_searchable(engine, db, tmp_path):
                         object_store_dir=tmp_path / "objects")
     with TestClient(create_app(settings)) as client:
         auth = {"Authorization": f"Bearer {settings.ingest_token}"}
-        body = ("Recommendation letter strategy for the NIW petition. " * 20).encode()
+        body = ("Recommendation letter strategy for the grant proposal. " * 20).encode()
         r = client.post("/v1/artifacts", params={"filename": "letter-strategy.md"},
                         content=body, headers=auth)
         assert r.status_code == 200 and r.json()["status"] == "created"

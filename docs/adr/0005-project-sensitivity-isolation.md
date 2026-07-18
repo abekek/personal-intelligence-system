@@ -8,5 +8,5 @@ webhook handler — enforcement is in code paths that write, never in prompts.
 Denied employer repos/paths are rejected at ingest with an audit record;
 content matching secret detectors is rejected server-side even though the
 daemon also redacts client-side (defense in depth). Every event carries a
-sensitivity label; highly-sensitive zones (NIW, finance) get separate scopes
+sensitivity label; highly-sensitive zones (immigration, finance) get separate scopes
 and schemas in later phases and are absent from Phases 0-1 by design.
