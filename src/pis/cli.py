@@ -136,7 +136,11 @@ def _cmd_artifacts_scan(args: argparse.Namespace) -> int:
     for path in sorted(root.rglob("*")):
         if not path.is_file() or path.suffix.lower() not in SCAN_SUFFIXES:
             continue
-        if path.stat().st_size > 25_000_000:
+        size = path.stat().st_size
+        if size == 0:
+            manifest["skipped_empty"] = manifest.get("skipped_empty", 0) + 1
+            continue
+        if size > 25_000_000:
             manifest["skipped_large"] += 1
             continue
         try:
