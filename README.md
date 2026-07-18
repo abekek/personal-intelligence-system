@@ -1,78 +1,157 @@
-# personal-intelligence-system
+# Personal Intelligence System
 
-Conversation-first personal intelligence system: an immutable event ledger that
-captures Claude Code sessions and GitHub activity, derives conversations/turns,
-and exposes exact + full-text retrieval. Spec: conversation_first v3.
+A self-hosted, conversation-first knowledge ledger. It continuously captures
+your AI-assisted work — **Claude Code sessions, claude.ai chats, uploaded
+documents, GitHub activity** — into an immutable event ledger, and makes all
+of it searchable (keyword + semantic) from anywhere: your terminal, claude.ai
+on the web, or your phone.
 
-## Quick start
+The core idea: your most valuable knowledge isn't in your file system — it's
+in your conversations. This system treats every AI conversation as a
+first-class, permanent, queryable record.
 
-    docker compose up -d postgres
-    uv sync
-    uv run alembic upgrade head
-    uv run pytest -q
+```mermaid
+flowchart LR
+    subgraph Capture["Capture (local)"]
+        CC[Claude Code<br/>Stop hook]
+        DAEMON[Capture daemon<br/>+ SQLite outbox]
+        CLI[Import CLI<br/>exports & folders]
+    end
 
-## Services
+    subgraph Cloud["Core (AWS)"]
+        API[FastAPI service]
+        LEDGER[(Immutable<br/>event ledger)]
+        PROJ[(Projections:<br/>conversations, turns,<br/>documents)]
+        S3[(S3 object store)]
+        BR[Bedrock<br/>embeddings]
+    end
 
-    uv run python -m pis.api      # ingestion + retrieval API on 127.0.0.1:8800
-    uv run python -m pis.daemon   # local capture daemon on 127.0.0.1:8787
+    subgraph Access
+        MCP[MCP connector<br/>OAuth 2.1]
+        CLAUDE[claude.ai<br/>web + mobile]
+        TERM[Terminal / API]
+    end
 
-## Claude Code hook
+    CC --> DAEMON --> API
+    CLI --> API
+    GH[GitHub webhooks] --> API
+    API --> LEDGER --> PROJ
+    API --> S3
+    PROJ <--> BR
+    MCP --> API
+    CLAUDE --> MCP
+    TERM --> API
+```
 
-See `integrations/claude-code/settings.example.json`.
+## What it does
 
-## Verification (Phase 0-1 exit criteria)
+- **Captures automatically.** A Claude Code `Stop` hook records every coding
+  turn (prompt, response, tools used, files changed, git context) seconds
+  after it happens. On claude.ai, Claude itself writes to the ledger through
+  MCP tools (`kb_capture_note`, `kb_capture_document`).
+- **Ingests your history.** Importers for Claude Code transcripts, claude.ai
+  account exports, and ChatGPT account exports — including text extracted
+  from documents you uploaded into chats. Every import is idempotent:
+  re-running adds only what's new.
+- **Remembers documents.** PDFs, DOCX, and text files are stored
+  content-addressed in S3, chunked, embedded, and linked to the conversations
+  that referenced them.
+- **Finds things by meaning.** Hybrid retrieval: PostgreSQL full-text search
+  and pgvector cosine similarity, fused with reciprocal rank fusion. A
+  paraphrase finds the conversation even when no keywords match.
+- **Answers from anywhere.** An OAuth-protected MCP server exposes the ledger
+  to claude.ai (web, desktop, mobile) as a custom connector, so you can ask
+  "what did I decide about X last month?" from your phone.
+- **Links code to conversations.** GitHub push webhooks connect commits back
+  to the Claude Code session that produced them.
 
-- `uv run pytest -q` — full suite incl. `tests/test_acceptance_slice1.py`,
-  which walks spec §26: hook -> daemon -> ledger -> normalizer -> search ->
-  evidence, replays every input (no duplicates), then a signed GitHub push
-  that links back to the producing session.
-- Ledger immutability: `tests/test_db.py` (UPDATE/DELETE raise).
-- Policy: `tests/test_ingest.py`, `tests/test_github_webhook.py`
-  (denied repo/path + secret content rejected and audited).
+## Architecture in one paragraph
 
-## Deployment (AWS core, local capture)
+Every capture becomes an immutable **event** (unique content hash, database
+trigger blocks UPDATE/DELETE). Normalizers project events into queryable
+tables — conversations, messages, turns, documents — that can be dropped and
+rebuilt from the ledger at any time. Policy (deny-lists, secret scanning)
+runs server-side on every write; secrets are additionally redacted
+client-side before upload. Retrieval layers exact match, full-text, and
+vector search over the projections. The MCP layer is a thin adapter: every
+tool wraps a retrieval or ingestion function 1:1.
 
-The core runs on AWS (us-east-1; set your account/profile via env),
-provisioned by CDK in `infra/` (stack `PisCore`): RDS Postgres 16
-(db.t4g.micro, encrypted, 7-day backups, private in the default VPC), App
-Runner service (image built from the repo Dockerfile; migrations run at boot
-via `pis.serve`), S3 object store, Secrets Manager tokens
-(`pis/ingest-token`, `pis/webhook-secret`). Capture stays on this Mac; the
-daemon's SQLite outbox buffers while offline.
+Read the full walkthrough in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-    cd infra && AWS_PROFILE=abekek npx cdk deploy   # infra changes
-    ./integrations/claude-code/install-daemon.sh    # launchd daemon -> cloud API
+## Stack
 
-## Live wiring (user setup)
+Python 3.12 · FastAPI · PostgreSQL 16 + pgvector · SQLAlchemy 2 + Alembic ·
+MCP Python SDK · AWS (App Runner, RDS, S3, Secrets Manager, Bedrock via CDK) ·
+pytest (95 tests)
 
-1. Run `integrations/claude-code/install-daemon.sh` (writes ~/.pis/daemon.env
-   with the cloud URL + tokens, loads the launchd daemon).
-2. Enable the Stop hook by copying `integrations/claude-code/settings.example.json`
-   contents into `~/.claude/settings.json` (global) or a repo's
-   `.claude/settings.json` (per-project). Before going global, replace the
-   placeholder employer patterns in `config/denied_paths.yaml`.
-3. GitHub webhooks: point a repo/App webhook at
-   `POST <ServiceUrl>/v1/github/webhook` with the `pis/webhook-secret` value.
+Runs for roughly **$40/month** on AWS, or entirely locally with Docker.
 
-## Connect claude.ai (web + mobile)
+## Quick start (local)
 
-1. Get your passcode:
-   `/usr/local/bin/aws secretsmanager get-secret-value --secret-id pis/oauth-passcode --query SecretString --output text --profile abekek --region us-east-1`
-2. In claude.ai: Settings → Connectors → Add custom connector → URL:
-   `https://<service-url>/mcp` (no client id/secret needed — DCR).
-3. Approve the OAuth screen with the passcode. Tools available in chats:
-   `kb_search`, `kb_get_conversation`, `kb_get_session_for_commit`,
-   `kb_recent_activity`, and `kb_capture_note` (tell Claude "log this to my
-   ledger" while chatting — that's the claude.ai capture path; the browser
-   extension phase was dropped in favor of it).
+```bash
+docker compose up -d postgres     # pgvector-enabled Postgres
+uv sync
+uv run alembic upgrade head
+uv run pytest -q                  # 95 tests
+uv run python -m pis.api          # API on 127.0.0.1:8800
+```
 
-Verify a deployment end-to-end:
-`uv run python scripts/verify_mcp_live.py https://<service-url> <passcode>`
+## Deploy to AWS
 
-## Historical backfill
+```bash
+cd infra && npm install
+CDK_DEFAULT_ACCOUNT=<your-account> npx cdk deploy   # RDS, S3, secrets, roles, Bedrock endpoint
+./scripts/create-service.sh                          # App Runner service
+```
 
-    uv run pis import inspect ~/.claude/projects
-    uv run pis import run ~/.claude/projects --mode bootstrap \
-      --api-url <ServiceUrl> --token <pis/ingest-token>
+The container migrates the database at boot and serves the API + MCP
+endpoint. Subsequent code changes: `npx cdk deploy && ./scripts/update-service.sh`.
 
-Manifests land in `var/import-manifests/`. Reimports are idempotent.
+## Connect claude.ai
+
+1. Settings → Connectors → **Add custom connector** → `https://<service-url>/mcp`
+2. Approve with your passcode (generated in Secrets Manager at deploy).
+3. Chat naturally: *"search my ledger for …"*, *"log this decision"*,
+   *"save this document"*.
+
+The server implements OAuth 2.1 with dynamic client registration and PKCE,
+so no client IDs or secrets are ever pasted around.
+
+## Capture your history
+
+```bash
+# Claude Code transcripts (local JSONL)
+uv run pis import run ~/.claude/projects --api-url $URL --token $TOKEN
+
+# claude.ai account export (Settings → Privacy → Export data)
+uv run pis import run export.zip --adapter claude-export --api-url $URL --token $TOKEN
+
+# ChatGPT account export
+uv run pis import run export.zip --adapter chatgpt-export --api-url $URL --token $TOKEN
+
+# Documents from folders
+uv run pis artifacts scan ~/Documents --api-url $URL --token $TOKEN
+```
+
+Live capture: `integrations/claude-code/install-daemon.sh` installs a
+launchd daemon and the Stop hook wiring; every future Claude Code turn lands
+in the ledger automatically.
+
+## Security model
+
+- Ledger immutability enforced by the database, not convention.
+- All personal data lives in your Postgres/S3 — never in this repo.
+- Secret scanning both client-side (redact) and server-side (reject + audit).
+- Deny-lists for repositories/paths that must never be captured.
+- MCP and API are bearer/OAuth-gated; the consent screen is passcode-locked.
+- Capture is fail-open for your tools (a dead daemon can never block Claude
+  Code) and fail-closed for data (unauthenticated writes are impossible).
+
+## Status & roadmap
+
+Working today: capture (Claude Code + claude.ai), historical import, hybrid
+semantic search, document ingestion, MCP connector, session↔commit linking.
+
+Next: LLM-based memory extraction (distilling history into decisions, claims
+and per-project context packs), curation workflow, artifact binary
+resolution, isolated finance vault.
