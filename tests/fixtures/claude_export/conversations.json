@@ -1,0 +1,54 @@
+[
+  {
+    "uuid": "11111111-aaaa-bbbb-cccc-000000000001",
+    "name": "Paper revision strategy",
+    "created_at": "2026-06-01T10:00:00Z",
+    "updated_at": "2026-06-01T10:20:00Z",
+    "chat_messages": [
+      {
+        "uuid": "msg-0001",
+        "sender": "human",
+        "text": "Should we target AAAI or KDD for the identifiability paper?",
+        "content": [{"type": "text", "text": "Should we target AAAI or KDD for the identifiability paper?"}],
+        "created_at": "2026-06-01T10:00:05Z",
+        "attachments": [],
+        "files": []
+      },
+      {
+        "uuid": "msg-0002",
+        "sender": "assistant",
+        "text": "AAAI main track fits the benchmark framing better than the KDD workshop.",
+        "content": [{"type": "text", "text": "AAAI main track fits the benchmark framing better than the KDD workshop."}],
+        "created_at": "2026-06-01T10:01:00Z",
+        "attachments": [],
+        "files": []
+      }
+    ]
+  },
+  {
+    "uuid": "11111111-aaaa-bbbb-cccc-000000000002",
+    "name": "Env setup",
+    "created_at": "2026-06-02T09:00:00Z",
+    "updated_at": "2026-06-02T09:05:00Z",
+    "chat_messages": [
+      {
+        "uuid": "msg-0003",
+        "sender": "human",
+        "text": "set password = topsecret99 in the env",
+        "content": [{"type": "text", "text": "set password = topsecret99 in the env"}],
+        "created_at": "2026-06-02T09:00:10Z",
+        "attachments": [{"file_name": "notes.pdf", "extracted_content": "Deployment checklist: rotate credentials quarterly and verify backups."}],
+        "files": []
+      },
+      {
+        "uuid": "msg-0004",
+        "sender": "assistant",
+        "text": "",
+        "content": [],
+        "created_at": "2026-06-02T09:01:00Z",
+        "attachments": [],
+        "files": []
+      }
+    ]
+  }
+]

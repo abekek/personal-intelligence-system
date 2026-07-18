@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+docs/superpowers/
+var/
+.env
+*.sqlite3
+dist/
+.DS_Store
+infra/node_modules/
+infra/cdk.out/
+infra/cdk.context.json

@@ -1,0 +1,71 @@
+[
+  {
+    "id": "conv-gpt-0001",
+    "title": "Benchmark ideas",
+    "create_time": 1780300800.0,
+    "update_time": 1780301400.0,
+    "current_node": "node-3",
+    "mapping": {
+      "node-0": {"id": "node-0", "message": null, "parent": null, "children": ["node-1"]},
+      "node-1": {
+        "id": "node-1",
+        "message": {
+          "id": "gptmsg-1",
+          "author": {"role": "user"},
+          "create_time": 1780300810.0,
+          "content": {"content_type": "text", "parts": ["What decoy bugs work best for a debugging benchmark?"]}
+        },
+        "parent": "node-0", "children": ["node-2"]
+      },
+      "node-2": {
+        "id": "node-2",
+        "message": {
+          "id": "gptmsg-2",
+          "author": {"role": "assistant"},
+          "create_time": 1780300870.0,
+          "content": {"content_type": "text", "parts": ["Off-by-one decoys near the real defect force falsification-seeking behavior."]}
+        },
+        "parent": "node-1", "children": ["node-3"]
+      },
+      "node-3": {
+        "id": "node-3",
+        "message": {
+          "id": "gptmsg-3",
+          "author": {"role": "system"},
+          "create_time": 1780300880.0,
+          "content": {"content_type": "text", "parts": [""]}
+        },
+        "parent": "node-2", "children": []
+      }
+    }
+  },
+  {
+    "id": "conv-gpt-0002",
+    "title": "Creds cleanup",
+    "create_time": 1780387200.0,
+    "update_time": 1780387500.0,
+    "current_node": "node-b",
+    "mapping": {
+      "node-a": {
+        "id": "node-a",
+        "message": {
+          "id": "gptmsg-4",
+          "author": {"role": "user"},
+          "create_time": 1780387210.0,
+          "content": {"content_type": "text", "parts": ["my key is AKIAIOSFODNN7EXAMPLE please rotate"]}
+        },
+        "parent": null, "children": ["node-b"]
+      },
+      "node-b": {
+        "id": "node-b",
+        "message": {
+          "id": "gptmsg-5",
+          "author": {"role": "assistant"},
+          "create_time": 1780387270.0,
+          "content": {"content_type": "multimodal_text", "parts": [{"content_type": "image_asset_pointer"}]}
+        },
+        "parent": "node-a", "children": []
+      }
+    }
+  }
+]

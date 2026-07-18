@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: pis
+      POSTGRES_PASSWORD: pis
+      POSTGRES_DB: pis
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./config/initdb:/docker-entrypoint-initdb.d
+volumes:
+  pgdata: {}

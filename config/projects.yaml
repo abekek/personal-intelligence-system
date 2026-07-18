@@ -1,0 +1,18 @@
+# Project registry (spec §24). Replace the examples with your real projects;
+# ids are free-form "area/name". `sensitivity: highly-sensitive` projects are
+# excluded from default export surfaces in later phases.
+projects:
+  - id: "research/example-paper"
+    type: "paper"
+    sensitivity: "confidential-personal"
+    aliases: ["my first paper"]
+    repositories: []
+  - id: "personal/example-case"
+    type: "case"
+    sensitivity: "highly-sensitive"
+    aliases: ["case"]
+    default_export: false
+  - id: "meta/personal-intelligence-system"
+    type: "software"
+    sensitivity: "confidential-personal"
+    repositories: ["OWNER/personal-intelligence-system"]

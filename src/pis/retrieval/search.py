@@ -1,0 +1,202 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from pis.db.models import Conversation
+
+
+@dataclass
+class SearchHit:
+    kind: str  # "message" | "turn" | "commit"
+    ref_id: str
+    conversation_id: str | None
+    snippet: str
+    event_id: str | None
+    score: float
+
+
+def _snippet(content: str, q: str, width: int = 80) -> str:
+    idx = content.lower().find(q.lower())
+    if idx < 0:
+        return content[:width]
+    start = max(0, idx - width // 2)
+    return content[start : idx + len(q) + width // 2]
+
+
+def search_exact(db: Session, q: str, limit: int = 20) -> list[SearchHit]:
+    hits: list[SearchHit] = []
+    rows = db.execute(text("""
+        SELECT m.conversation_id, r.message_id, r.text_content, r.event_id
+        FROM message_revisions r JOIN messages m ON m.id = r.message_id
+        WHERE r.text_content ILIKE '%' || :q || '%'
+        ORDER BY r.created_at DESC LIMIT :limit
+    """), {"q": q, "limit": limit})
+    for conv_id, mid, content, event_id in rows:
+        hits.append(SearchHit("message", mid, conv_id, _snippet(content, q), event_id, 1.0))
+
+    rows = db.execute(text("""
+        SELECT t.conversation_id, t.id, coalesce(t.user_prompt, '') || ' ' ||
+               coalesce(t.assistant_response, ''), t.event_id
+        FROM turns t
+        WHERE :q = ANY(t.changed_files)
+        LIMIT :limit
+    """), {"q": q, "limit": limit})
+    for conv_id, tid, content, event_id in rows:
+        hits.append(SearchHit("turn", tid, conv_id, _snippet(content, q), event_id, 1.0))
+
+    rows = db.execute(text("""
+        SELECT g.id, coalesce(g.title, ''), g.event_id
+        FROM git_objects g
+        WHERE g.object_key = :q OR :q = ANY(g.files)
+        LIMIT :limit
+    """), {"q": q, "limit": limit})
+    for gid, title, event_id in rows:
+        hits.append(SearchHit("commit", gid, None, title[:120], event_id, 1.0))
+    return hits[:limit]
+
+
+def search_fts(db: Session, q: str, limit: int = 20) -> list[SearchHit]:
+    hits: list[SearchHit] = []
+    rows = db.execute(text("""
+        SELECT m.conversation_id, r.message_id, r.text_content, r.event_id,
+               ts_rank(r.tsv, websearch_to_tsquery('english', :q)) AS rank
+        FROM message_revisions r JOIN messages m ON m.id = r.message_id
+        WHERE r.tsv @@ websearch_to_tsquery('english', :q)
+        ORDER BY rank DESC LIMIT :limit
+    """), {"q": q, "limit": limit})
+    for conv_id, mid, content, event_id, rank in rows:
+        hits.append(SearchHit("message", mid, conv_id, content[:160], event_id, float(rank)))
+
+    rows = db.execute(text("""
+        SELECT t.conversation_id, t.id, coalesce(t.user_prompt, '') || ' ' ||
+               coalesce(t.assistant_response, ''), t.event_id,
+               ts_rank(t.tsv, websearch_to_tsquery('english', :q)) AS rank
+        FROM turns t
+        WHERE t.tsv @@ websearch_to_tsquery('english', :q)
+        ORDER BY rank DESC LIMIT :limit
+    """), {"q": q, "limit": limit})
+    for conv_id, tid, content, event_id, rank in rows:
+        hits.append(SearchHit("turn", tid, conv_id, content[:160], event_id, float(rank)))
+
+    rows = db.execute(text("""
+        SELECT c.id, a.original_filename, c.text_content,
+               ts_rank(c.tsv, websearch_to_tsquery('english', :q)) AS rank
+        FROM artifact_chunks c
+        JOIN artifact_versions v ON v.id = c.version_id
+        JOIN artifacts a ON a.artifact_id = v.artifact_id
+        WHERE c.tsv @@ websearch_to_tsquery('english', :q)
+        ORDER BY rank DESC LIMIT :limit
+    """), {"q": q, "limit": limit})
+    for chunk_id, filename, content, rank in rows:
+        hits.append(SearchHit("document", chunk_id, None,
+                              f"[{filename}] {content[:140]}", None, float(rank)))
+
+    hits.sort(key=lambda h: h.score, reverse=True)
+    return hits[:limit]
+
+
+def search_semantic(db: Session, query_vec: str, limit: int = 20) -> list[SearchHit]:
+    """query_vec is a pgvector literal ('[..]'). Cosine distance ranking."""
+    hits: list[SearchHit] = []
+    rows = db.execute(text("""
+        SELECT m.conversation_id, r.message_id, r.text_content, r.event_id,
+               1 - (r.embedding <=> CAST(:vec AS vector)) AS score
+        FROM message_revisions r JOIN messages m ON m.id = r.message_id
+        WHERE r.embedding IS NOT NULL
+        ORDER BY r.embedding <=> CAST(:vec AS vector) LIMIT :limit
+    """), {"vec": query_vec, "limit": limit})
+    for conv_id, mid, content, event_id, score in rows:
+        hits.append(SearchHit("message", mid, conv_id, (content or "")[:160],
+                              event_id, float(score)))
+    rows = db.execute(text("""
+        SELECT t.conversation_id, t.id,
+               coalesce(t.user_prompt, '') || ' ' || coalesce(t.assistant_response, ''),
+               t.event_id, 1 - (t.embedding <=> CAST(:vec AS vector)) AS score
+        FROM turns t WHERE t.embedding IS NOT NULL
+        ORDER BY t.embedding <=> CAST(:vec AS vector) LIMIT :limit
+    """), {"vec": query_vec, "limit": limit})
+    for conv_id, tid, content, event_id, score in rows:
+        hits.append(SearchHit("turn", tid, conv_id, content[:160], event_id, float(score)))
+    rows = db.execute(text("""
+        SELECT c.id, a.original_filename, c.text_content,
+               1 - (c.embedding <=> CAST(:vec AS vector)) AS score
+        FROM artifact_chunks c
+        JOIN artifact_versions v ON v.id = c.version_id
+        JOIN artifacts a ON a.artifact_id = v.artifact_id
+        WHERE c.embedding IS NOT NULL
+        ORDER BY c.embedding <=> CAST(:vec AS vector) LIMIT :limit
+    """), {"vec": query_vec, "limit": limit})
+    for chunk_id, filename, content, score in rows:
+        hits.append(SearchHit("document", chunk_id, None,
+                              f"[{filename}] {content[:140]}", None, float(score)))
+    hits.sort(key=lambda h: h.score, reverse=True)
+    return hits[:limit]
+
+
+def rrf_fuse(result_lists: list[list[SearchHit]], limit: int = 20, k: int = 60) -> list[SearchHit]:
+    scores: dict[str, float] = {}
+    best: dict[str, SearchHit] = {}
+    for results in result_lists:
+        for rank, hit in enumerate(results):
+            key = f"{hit.kind}:{hit.ref_id}"
+            scores[key] = scores.get(key, 0.0) + 1.0 / (k + rank + 1)
+            if key not in best:
+                best[key] = hit
+    fused = sorted(best.items(), key=lambda kv: scores[kv[0]], reverse=True)
+    out = []
+    for key, hit in fused[:limit]:
+        out.append(SearchHit(hit.kind, hit.ref_id, hit.conversation_id,
+                             hit.snippet, hit.event_id, round(scores[key], 6)))
+    return out
+
+
+def search_hybrid(db: Session, q: str, query_vec: str | None, limit: int = 20) -> list[SearchHit]:
+    lists = [search_fts(db, q, limit=limit)]
+    if query_vec is not None:
+        lists.append(search_semantic(db, query_vec, limit=limit))
+    return rrf_fuse(lists, limit=limit)
+
+
+def get_conversation(db: Session, conversation_id: str) -> dict | None:
+    conv = db.get(Conversation, conversation_id)
+    if conv is None:
+        return None
+    messages = [
+        {"id": mid, "role": role, "position": pos, "text": content,
+         "revision": rev, "event_id": event_id}
+        for mid, role, pos, content, rev, event_id in db.execute(text("""
+            SELECT m.id, m.role, m.position, r.text_content, r.revision, r.event_id
+            FROM messages m
+            JOIN message_revisions r ON r.message_id = m.id
+            AND r.revision = (SELECT max(revision) FROM message_revisions WHERE message_id = m.id)
+            WHERE m.conversation_id = :cid
+            ORDER BY m.position
+        """), {"cid": conversation_id})
+    ]
+    tool_events = [
+        {"id": tid, "tool_name": name, "summary": summary, "event_id": event_id}
+        for tid, name, summary, event_id in db.execute(text("""
+            SELECT id, tool_name, summary, event_id FROM tool_events
+            WHERE conversation_id = :cid ORDER BY occurred_at, id
+        """), {"cid": conversation_id})
+    ]
+    documents = [
+        {"artifact_id": aid, "filename": name, "resolution_status": status}
+        for aid, name, status in db.execute(text("""
+            SELECT artifact_id, display_name, resolution_status
+            FROM artifact_references WHERE conversation_id = :cid ORDER BY created_at
+        """), {"cid": conversation_id})
+    ]
+    return {
+        "conversation": {
+            "id": conv.id, "provider": conv.provider, "title": conv.title,
+            "provider_conversation_id": conv.provider_conversation_id,
+            "sensitivity": conv.sensitivity,
+        },
+        "messages": messages,
+        "tool_events": tool_events,
+        "documents": documents,
+    }

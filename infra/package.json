@@ -1,0 +1,18 @@
+{
+  "name": "pis-infra",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "cdk": "cdk"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.176.0",
+    "constructs": "^10.4.2"
+  },
+  "devDependencies": {
+    "aws-cdk": "^2.176.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.0",
+    "@types/node": "^22.10.0"
+  }
+}

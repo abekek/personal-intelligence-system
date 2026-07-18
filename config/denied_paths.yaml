@@ -1,0 +1,8 @@
+denied_path_patterns:
+  - "*/.env"
+  - "*/.env.*"
+  - "*/secrets/*"
+  - "*id_rsa*"
+  - "*.pem"
+denied_repo_patterns:
+  - "*employer-org/*"

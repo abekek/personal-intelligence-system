@@ -1,0 +1,17 @@
+{
+  "ref": "refs/heads/main",
+  "compare": "https://github.com/abekek/demo/compare/abc...def",
+  "repository": {"full_name": "abekek/demo", "default_branch": "main"},
+  "commits": [
+    {
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "message": "feat: add retry helper",
+      "timestamp": "2026-07-18T12:30:00Z",
+      "author": {"name": "Alibek Kaliyev"},
+      "added": [],
+      "modified": ["src/utils.py"],
+      "removed": []
+    }
+  ],
+  "head_commit": {"id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "timestamp": "2026-07-18T12:30:00Z"}
+}
