@@ -147,6 +147,45 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return [{"session_id": sid, "confidence": conf, "signals": signals, "commit": key}
                 for sid, conf, signals, key in rows]
 
+    @app.post("/v1/admin/extract", dependencies=[Depends(require_token)])
+    def extract(limit: int = 5, db: Session = Depends(db_session)):
+        import uuid as _uuid
+        from datetime import datetime, timezone
+        from pis.embeddings import embed_texts
+        from pis.extraction.extractor import PROMPT_VERSION, bedrock_llm, extract_conversation
+
+        conversation_ids = [cid for (cid,) in db.execute(sa_text("""
+            SELECT id FROM conversations
+            WHERE extracted_at IS NULL OR extracted_at < updated_at
+            ORDER BY updated_at DESC LIMIT :limit"""), {"limit": limit})]
+        if not conversation_ids:
+            return {"processed": 0, "remaining": 0}
+        run_id = "run_" + _uuid.uuid4().hex[:16]
+        db.execute(sa_text(
+            "INSERT INTO extraction_runs (id, model, prompt_version, stats) "
+            "VALUES (:i, :m, :p, '{}')"),
+            {"i": run_id, "m": settings.extraction_model, "p": PROMPT_VERSION})
+        db.commit()
+        llm = bedrock_llm(settings)
+        embedder = lambda texts: embed_texts(texts, settings)  # noqa: E731
+        totals = {"proposed": 0, "created": 0, "confirmed": 0, "errors": 0}
+        for conversation_id in conversation_ids:
+            try:
+                counts = extract_conversation(db, conversation_id, llm, embedder, run_id)
+                for key in ("proposed", "created", "confirmed"):
+                    totals[key] += counts[key]
+            except Exception:
+                db.rollback()
+                totals["errors"] += 1
+        remaining = db.execute(sa_text(
+            "SELECT count(*) FROM conversations "
+            "WHERE extracted_at IS NULL OR extracted_at < updated_at")).scalar()
+        db.execute(sa_text(
+            "UPDATE extraction_runs SET completed_at = :n, stats = :s WHERE id = :i"),
+            {"n": datetime.now(timezone.utc), "s": json.dumps(totals), "i": run_id})
+        db.commit()
+        return {"processed": len(conversation_ids), "remaining": remaining, **totals}
+
     @app.post("/v1/artifacts", dependencies=[Depends(require_token)])
     async def upload_artifact(request: Request, filename: str,
                               conversation_uuid: str = "",

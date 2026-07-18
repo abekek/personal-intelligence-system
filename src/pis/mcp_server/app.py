@@ -18,7 +18,13 @@ from pis.config import Settings
 from pis.ingest.service import ingest_events
 from pis.oauth.service import verify_access
 from pis.policy.engine import PolicyEngine
-from pis.retrieval.search import get_conversation, search_exact, search_fts, search_hybrid
+from pis.retrieval.search import (
+    build_context_pack,
+    get_conversation,
+    search_exact,
+    search_fts,
+    search_hybrid,
+)
 from pis.schemas.events import CanonicalEvent, ContentPart, EventType
 
 
@@ -97,6 +103,15 @@ def build_mcp(settings: Settings, session_factory, policy: PolicyEngine) -> Fast
             return [{"conversation_id": cid, "provider": provider, "title": title,
                      "updated_at": str(updated)}
                     for cid, provider, title, updated in rows]
+
+    @mcp.tool()
+    def kb_get_context_pack(topic: str) -> dict:
+        """Assembled current knowledge about a topic: distilled memories
+        (decisions, facts, results — each with evidence ids) plus the most
+        relevant conversations. Prefer this over kb_search when the user asks
+        "what's the state of X" or "what did we decide about X"."""
+        with session_factory() as db:
+            return build_context_pack(db, topic, _query_vec(topic))
 
     @mcp.tool()
     def kb_capture_document(filename: str, content: str, note: str = "") -> dict:

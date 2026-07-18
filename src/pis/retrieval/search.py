@@ -94,6 +94,17 @@ def search_fts(db: Session, q: str, limit: int = 20) -> list[SearchHit]:
         hits.append(SearchHit("document", chunk_id, None,
                               f"[{filename}] {content[:140]}", None, float(rank)))
 
+    rows = db.execute(text("""
+        SELECT memory_id, kind, statement, source_conversation_id,
+               ts_rank(tsv, websearch_to_tsquery('english', :q)) AS rank
+        FROM memory_items WHERE status = 'current'
+          AND tsv @@ websearch_to_tsquery('english', :q)
+        ORDER BY rank DESC LIMIT :limit
+    """), {"q": q, "limit": limit})
+    for memory_id, kind, statement, conv_id, rank in rows:
+        hits.append(SearchHit("memory", memory_id, conv_id,
+                              f"({kind}) {statement[:150]}", None, float(rank)))
+
     hits.sort(key=lambda h: h.score, reverse=True)
     return hits[:limit]
 
@@ -132,8 +143,54 @@ def search_semantic(db: Session, query_vec: str, limit: int = 20) -> list[Search
     for chunk_id, filename, content, score in rows:
         hits.append(SearchHit("document", chunk_id, None,
                               f"[{filename}] {content[:140]}", None, float(score)))
+    rows = db.execute(text("""
+        SELECT memory_id, kind, statement, source_conversation_id,
+               1 - (embedding <=> CAST(:vec AS vector)) AS score
+        FROM memory_items WHERE status = 'current' AND embedding IS NOT NULL
+        ORDER BY embedding <=> CAST(:vec AS vector) LIMIT :limit
+    """), {"vec": query_vec, "limit": limit})
+    for memory_id, kind, statement, conv_id, score in rows:
+        hits.append(SearchHit("memory", memory_id, conv_id,
+                              f"({kind}) {statement[:150]}", None, float(score)))
     hits.sort(key=lambda h: h.score, reverse=True)
     return hits[:limit]
+
+
+def build_context_pack(db: Session, topic: str, query_vec: str | None,
+                       limit: int = 12) -> dict:
+    """Assembled current knowledge about a topic: memories with provenance,
+    plus the most relevant raw conversations."""
+    hits = search_hybrid(db, topic, query_vec, limit=30)
+    memory_ids = [h.ref_id for h in hits if h.kind == "memory"][:limit]
+    memories = []
+    for memory_id in memory_ids:
+        row = db.execute(text("""
+            SELECT kind, statement, confidence, authority, last_confirmed_at
+            FROM memory_items WHERE memory_id = :m"""), {"m": memory_id}).first()
+        if row is None:
+            continue
+        evidence = [event_id for (event_id,) in db.execute(text(
+            "SELECT event_id FROM memory_evidence WHERE memory_id = :m"),
+            {"m": memory_id})]
+        memories.append({
+            "memory_id": memory_id, "kind": row[0], "statement": row[1],
+            "confidence": row[2], "authority": row[3],
+            "last_confirmed_at": str(row[4]), "evidence_event_ids": evidence,
+        })
+    conversations: list[dict] = []
+    seen: set[str] = set()
+    for hit in hits:
+        if hit.kind in ("message", "turn") and hit.conversation_id not in seen:
+            seen.add(hit.conversation_id)
+            title = db.execute(text(
+                "SELECT title FROM conversations WHERE id = :c"),
+                {"c": hit.conversation_id}).scalar()
+            conversations.append({"conversation_id": hit.conversation_id,
+                                  "title": title, "snippet": hit.snippet})
+        if len(conversations) >= 5:
+            break
+    return {"topic": topic, "memories": memories,
+            "related_conversations": conversations}
 
 
 def rrf_fuse(result_lists: list[list[SearchHit]], limit: int = 20, k: int = 60) -> list[SearchHit]:
