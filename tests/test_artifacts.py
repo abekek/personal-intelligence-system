@@ -25,6 +25,17 @@ def test_extract_unsupported_returns_none():
     assert extract_text(b"\x00\x01binary", "image.png") is None
 
 
+def test_extract_caps_huge_text():
+    from pis.artifacts.extract import MAX_TEXT_CHARS
+    extraction = extract_text(b"a" * (MAX_TEXT_CHARS * 4), "huge.txt")
+    total = sum(len(b.text) for b in extraction.blocks)
+    assert total == MAX_TEXT_CHARS
+    assert extraction.blocks[-1].locator["truncated"] is True
+    # bounded chunk count is the point: a capped file must not fan out
+    # into thousands of embedding calls
+    assert len(chunk_blocks(extraction.blocks)) < 200
+
+
 def test_ingest_file_roundtrip_and_dedupe(db, tmp_path):
     store = ObjectStore(tmp_path)
     payload = ("Grant application evidence checklist\n" * 30).encode()

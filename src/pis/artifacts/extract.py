@@ -30,19 +30,43 @@ class Extraction:
     blocks: list[ExtractedBlock]
 
 
+# Every extracted char becomes chunk rows + one embedding call per ~1.3KB;
+# an uncapped 16MB text file means ~12k synchronous Bedrock calls in one
+# request, which starves health checks and gets the instance replaced
+# mid-request. Cap keeps the worst case at ~150 chunks.
+MAX_TEXT_CHARS = 200_000
+
+
+def _cap_blocks(extraction: Extraction | None) -> Extraction | None:
+    if extraction is None:
+        return None
+    kept: list[ExtractedBlock] = []
+    budget = MAX_TEXT_CHARS
+    for block in extraction.blocks:
+        if budget <= 0:
+            break
+        if len(block.text) > budget:
+            block = ExtractedBlock(block.text[:budget],
+                                   {**block.locator, "truncated": True})
+        budget -= len(block.text)
+        kept.append(block)
+    return Extraction(extraction.parser, kept)
+
+
 def extract_text(data: bytes, filename: str) -> Extraction | None:
     """Returns None for unsupported formats."""
     name = filename.lower()
     if name.endswith(".pdf"):
-        return _extract_pdf(data)
+        return _cap_blocks(_extract_pdf(data))
     if name.endswith(".docx"):
-        return _extract_docx(data)
+        return _cap_blocks(_extract_docx(data))
     if any(name.endswith(sfx) for sfx in TEXT_SUFFIXES):
         try:
             text = data.decode("utf-8")
         except UnicodeDecodeError:
             return None
-        return Extraction("plain", [ExtractedBlock(text, {"type": "file"})])
+        return _cap_blocks(
+            Extraction("plain", [ExtractedBlock(text, {"type": "file"})]))
     return None
 
 

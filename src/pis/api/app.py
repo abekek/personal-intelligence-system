@@ -239,6 +239,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         data = await request.body()
         if not data:
             raise HTTPException(status_code=400, detail="empty body")
+        if len(data) > 25_000_000:
+            raise HTTPException(status_code=413, detail="file too large")
         embedder = None
         if settings.embeddings_enabled:
             from pis.embeddings import embed_texts
