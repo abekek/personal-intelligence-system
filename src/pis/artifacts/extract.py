@@ -35,6 +35,13 @@ class Extraction:
 # request, which starves health checks and gets the instance replaced
 # mid-request. Cap keeps the worst case at ~150 chunks.
 MAX_TEXT_CHARS = 200_000
+# Text-budget early-stop never fires on scanned (image-only) PDFs, where
+# every page parses expensively and yields no text — bound pages too.
+MAX_PDF_PAGES = 300
+# pypdf parsing is pure Python and holds the GIL, starving the event loop
+# (and App Runner health checks, tolerance ~50s) for the whole parse. A
+# wall-clock bound keeps any single document from wedging the instance.
+MAX_PARSE_SECONDS = 10.0
 
 
 def _cap_blocks(extraction: Extraction | None) -> Extraction | None:
@@ -71,16 +78,16 @@ def extract_text(data: bytes, filename: str) -> Extraction | None:
 
 
 def _extract_pdf(data: bytes) -> Extraction | None:
+    import time
     from pypdf import PdfReader
     try:
+        deadline = time.monotonic() + MAX_PARSE_SECONDS
         reader = PdfReader(io.BytesIO(data))
         blocks = []
         total = 0
         for page_number, page in enumerate(reader.pages, start=1):
-            # Stop parsing once the text budget is met: page.extract_text()
-            # is CPU-bound, and a few hundred pages of it starves health
-            # checks on the single-vCPU instance.
-            if total >= MAX_TEXT_CHARS:
+            if (total >= MAX_TEXT_CHARS or page_number > MAX_PDF_PAGES
+                    or time.monotonic() > deadline):
                 break
             text = (page.extract_text() or "").strip()
             if text:
