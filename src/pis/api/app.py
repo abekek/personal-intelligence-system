@@ -276,6 +276,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"status": result.status, "artifact_id": result.artifact_id,
                 "version_id": result.version_id, "chunks": result.chunks}
 
+    @app.post("/v1/artifacts/resolve-references",
+              dependencies=[Depends(require_token)])
+    async def resolve_artifact_references(request: Request,
+                                          db: Session = Depends(db_session)):
+        from pis.artifacts.service import resolve_references
+        body = json.loads(await request.body())
+        return resolve_references(db, body.get("provider", "claude"),
+                                  body.get("references") or [])
+
     app.include_router(build_oauth_router(settings, db_session))
 
     public = settings.public_url.rstrip("/")

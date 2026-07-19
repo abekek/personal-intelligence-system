@@ -166,6 +166,48 @@ def _cmd_artifacts_scan(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_artifacts_resolve(args: argparse.Namespace) -> int:
+    """Match claude.ai export binary references to stored artifacts."""
+    from pis.importers.claude_export import collect_binary_references
+    references, warnings = collect_binary_references(Path(args.export))
+    totals = {"resolved": 0, "unresolved": 0, "already_resolved": 0, "upgraded": 0}
+    for i in range(0, len(references), 500):
+        response = httpx.post(
+            f"{args.api_url}/v1/artifacts/resolve-references",
+            json={"provider": "claude", "references": references[i : i + 500]},
+            headers={"Authorization": f"Bearer {args.token}"}, timeout=115.0,
+        )
+        response.raise_for_status()
+        for key, value in response.json().items():
+            totals[key] = totals.get(key, 0) + value
+    print(json.dumps({"references": len(references), **totals,
+                      "warnings": warnings}, indent=2))
+    return 0
+
+
+def _cmd_import_extras(args: argparse.Namespace) -> int:
+    """Ingest projects/ docs and memories.json from a claude.ai export."""
+    from pis.importers.claude_export import collect_export_extras
+    manifest = {"documents": 0, "created": 0, "duplicate": 0, "errors": 0}
+    for doc in collect_export_extras(Path(args.export)):
+        manifest["documents"] += 1
+        try:
+            response = httpx.post(
+                f"{args.api_url}/v1/artifacts",
+                params={"filename": doc["filename"]},
+                content=doc["content"].encode(),
+                headers={"Authorization": f"Bearer {args.token}"}, timeout=115.0,
+            )
+            response.raise_for_status()
+            status = response.json()["status"]
+            manifest[status] = manifest.get(status, 0) + 1
+        except Exception as exc:
+            manifest["errors"] += 1
+            print(f"error: {doc['filename']}: {exc}", file=sys.stderr)
+    print(json.dumps(manifest, indent=2))
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="pis")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -177,9 +219,22 @@ def main() -> int:
     scan.add_argument("--api-url")
     scan.add_argument("--token")
     scan.set_defaults(fn=_cmd_artifacts_scan)
+    resolve = artifacts_sub.add_parser(
+        "resolve", help="match export binary refs to stored artifacts")
+    resolve.add_argument("export")
+    resolve.add_argument("--api-url")
+    resolve.add_argument("--token")
+    resolve.set_defaults(fn=_cmd_artifacts_resolve)
 
     imp = sub.add_parser("import", help="historical import")
     imp_sub = imp.add_subparsers(dest="import_command", required=True)
+
+    extras = imp_sub.add_parser(
+        "extras", help="ingest projects/ + memories.json from a claude.ai export")
+    extras.add_argument("export")
+    extras.add_argument("--api-url")
+    extras.add_argument("--token")
+    extras.set_defaults(fn=_cmd_import_extras)
 
     inspect = imp_sub.add_parser("inspect", help="dry-run inspection")
     inspect.add_argument("root")

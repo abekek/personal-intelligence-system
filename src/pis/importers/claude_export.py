@@ -121,6 +121,98 @@ def collect_attachment_documents(path: Path) -> list[dict]:
     return documents
 
 
+def collect_binary_references(path: Path) -> tuple[list[dict], dict]:
+    """Binary file references from export messages: the export carries only
+    {file_uuid, file_name}, never bytes, so these resolve against artifacts
+    ingested from disk scans. Returns unique (conversation, name) pairs."""
+    warnings: dict = {"nameless_refs_skipped": 0}
+    seen: set[tuple[str, str]] = set()
+    references: list[dict] = []
+    for conv in _load_conversations(Path(path), warnings):
+        conv_id = conv.get("uuid") or "unknown"
+        for message in conv.get("chat_messages") or []:
+            for file_ref in message.get("files") or []:
+                name = (file_ref.get("file_name") or "").strip()
+                if not name:
+                    warnings["nameless_refs_skipped"] += 1
+                    continue
+                if (conv_id, name) in seen:
+                    continue
+                seen.add((conv_id, name))
+                references.append({"conversation_uuid": conv_id, "file_name": name})
+    return references, warnings
+
+
+def collect_export_extras(path: Path) -> list[dict]:
+    """Project docs and account-level memory from the export zip/dir, as
+    documents for the artifact pipeline: [{filename, content}].
+
+    memories.json is Claude's own summary of the user (agent-authored) —
+    ingested as documents it stays searchable but is never mined into
+    memories, so it cannot launder into primary-evidence facts."""
+    path = Path(path)
+
+    def _read(name: str) -> bytes | None:
+        if path.suffix == ".zip":
+            with zipfile.ZipFile(path) as archive:
+                matches = [n for n in archive.namelist() if n == name
+                           or n.endswith("/" + name)]
+                return archive.read(matches[0]) if matches else None
+        candidate = path / name
+        return candidate.read_bytes() if candidate.is_file() else None
+
+    def _project_files() -> list[tuple[str, bytes]]:
+        if path.suffix == ".zip":
+            with zipfile.ZipFile(path) as archive:
+                return [(n, archive.read(n)) for n in archive.namelist()
+                        if "projects/" in n and n.endswith(".json")]
+        return [(str(p), p.read_bytes())
+                for p in sorted((path / "projects").glob("*.json"))] \
+            if (path / "projects").is_dir() else []
+
+    documents: list[dict] = []
+    for _, raw in _project_files():
+        project = json.loads(raw)
+        name = project.get("name") or project.get("uuid") or "project"
+        description = (project.get("description") or "").strip()
+        template = (project.get("prompt_template") or "").strip()
+        overview = "\n\n".join(part for part in (
+            f"# Claude.ai project: {name}", description,
+            f"## Prompt template\n{template}" if template else "") if part)
+        if description or template:
+            documents.append({
+                "filename": f"claude-project--{name}--overview.md",
+                "content": overview})
+        for doc in project.get("docs") or []:
+            content = (doc.get("content") or "").strip()
+            if content:
+                documents.append({
+                    "filename": f"claude-project--{name}--{doc.get('filename') or 'doc.md'}",
+                    "content": content})
+
+    raw = _read("memories.json")
+    if raw:
+        for account in json.loads(raw):
+            conv_memory = (account.get("conversations_memory") or "").strip()
+            if conv_memory:
+                documents.append({
+                    "filename": "claude-memory--conversations.md",
+                    "content": conv_memory})
+            for project_uuid, text in (account.get("project_memories") or {}).items():
+                if (text or "").strip():
+                    documents.append({
+                        "filename": f"claude-memory--project-{project_uuid}.md",
+                        "content": text.strip()})
+            for entry in account.get("memory_files") or []:
+                content = (entry.get("content") or "").strip()
+                if content:
+                    slug = (entry.get("path") or "file").strip("/").replace("/", "--")
+                    documents.append({
+                        "filename": f"claude-memory--{slug}",
+                        "content": content})
+    return documents
+
+
 def import_claude_export(path: Path, sender: Callable[[list[dict]], list],
                          batch_size: int = 50) -> dict:
     warnings_events = build_events_for_export_file(path)

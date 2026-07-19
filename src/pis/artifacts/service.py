@@ -30,6 +30,56 @@ def link_artifact_to_conversation(
         db.commit()
 
 
+def resolve_references(db: Session, provider: str,
+                       references: list[dict]) -> dict:
+    """Match export binary references to stored artifacts by filename.
+
+    The claude.ai export carries file names but never bytes; the artifact
+    store holds documents ingested from disk scans. Matches become
+    resolved_by_name references; misses are persisted unresolved so the
+    coverage gap stays queryable. Idempotent per (conversation, name);
+    re-running upgrades previously-unresolved rows when an artifact has
+    appeared since."""
+    from sqlalchemy import text as sa_text
+
+    from pis.db.models import ArtifactReference
+
+    counts = {"resolved": 0, "unresolved": 0, "already_resolved": 0, "upgraded": 0}
+    for ref in references:
+        name = (ref.get("file_name") or "").strip()
+        conversation_uuid = ref.get("conversation_uuid") or ""
+        if not name or not conversation_uuid:
+            continue
+        conversation_id = ids.conversation_id(provider, conversation_uuid)
+        ref_id = "ref_" + ids._h(f"byname:{conversation_id}:{name}")
+        artifact_id = db.execute(sa_text("""
+            SELECT a.artifact_id FROM artifacts a
+            JOIN artifact_versions v ON v.artifact_id = a.artifact_id
+            WHERE a.original_filename = :name
+            ORDER BY v.created_at DESC LIMIT 1
+        """), {"name": name}).scalar()
+        existing = db.get(ArtifactReference, ref_id)
+        if existing is not None:
+            if existing.artifact_id is None and artifact_id is not None:
+                existing.artifact_id = artifact_id
+                existing.resolution_status = "resolved_by_name"
+                counts["upgraded"] += 1
+            else:
+                counts["already_resolved"] += 1
+            continue
+        db.add(ArtifactReference(
+            id=ref_id, artifact_id=artifact_id, conversation_id=conversation_id,
+            display_name=name,
+            resolution_status=("resolved_by_name" if artifact_id
+                               else "unresolved_missing_binary"),
+            provider_reference={"provider": provider,
+                                "conversation_uuid": conversation_uuid},
+        ))
+        counts["resolved" if artifact_id else "unresolved"] += 1
+    db.commit()
+    return counts
+
+
 @dataclass
 class ArtifactResult:
     status: str  # "created" | "duplicate" | "unsupported"

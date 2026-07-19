@@ -1,0 +1,1 @@
+{"uuid": "p-0001", "name": "Thesis helper", "description": "Helps with thesis chapters", "is_private": true, "prompt_template": "Always cite sources.", "docs": [{"uuid": "d-1", "filename": "style-guide.md", "content": "Use plain prose. Avoid passive voice.", "created_at": "2026-01-01"}]}
