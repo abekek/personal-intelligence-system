@@ -10,7 +10,7 @@ The core idea: your most valuable knowledge isn't in your file system — it's
 in your conversations. This system treats every AI conversation as a
 first-class, permanent, queryable record.
 
-![System design](docs/assets/system-design-poster.png)
+![System design](docs/assets/system-design-poster-light.png)
 
 ## What it does
 
