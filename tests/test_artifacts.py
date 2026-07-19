@@ -25,6 +25,20 @@ def test_extract_unsupported_returns_none():
     assert extract_text(b"\x00\x01binary", "image.png") is None
 
 
+def test_credential_filenames_denied(db, tmp_path):
+    from pis.security.filenames import is_denied_filename
+    assert is_denied_filename("ddb-ai-companion_accessKeys.csv")
+    assert is_denied_filename(".env.production")
+    assert is_denied_filename("server.pem")
+    assert not is_denied_filename("expenses.csv")
+    assert not is_denied_filename("environment-policy.pdf")
+    result = ingest_file(db, ObjectStore(tmp_path), b"AKIA...,secret",
+                         "prod_accessKeys.csv")
+    assert result.status == "denied" and result.artifact_id is None
+    total = db.execute(sa.text("SELECT count(*) FROM artifacts")).scalar()
+    assert total == 0
+
+
 def test_extract_caps_huge_text():
     from pis.artifacts.extract import MAX_TEXT_CHARS
     extraction = extract_text(b"a" * (MAX_TEXT_CHARS * 4), "huge.txt")

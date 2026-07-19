@@ -92,6 +92,10 @@ def ingest_file(db: Session, store, data: bytes, filename: str,
                 source_meta: dict | None = None, embedder=None) -> ArtifactResult:
     from sqlalchemy.exc import IntegrityError
 
+    from pis.security.filenames import is_denied_filename
+    if is_denied_filename(filename):
+        return ArtifactResult("denied")
+
     sha = hashlib.sha256(data).hexdigest()
     existing = db.scalar(select(ArtifactVersion).where(ArtifactVersion.sha256 == sha))
     if existing is not None:

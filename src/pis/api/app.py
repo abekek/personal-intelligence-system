@@ -111,6 +111,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/v1/admin/embed-backfill", dependencies=[Depends(require_token)])
     def embed_backfill(limit: int = 100, db: Session = Depends(db_session)):
         from pis.embeddings import embed_texts, to_pgvector
+        tables = {"revision": "message_revisions", "turn": "turns",
+                  "chunk": "artifact_chunks"}
         rows = list(db.execute(sa_text("""
             SELECT 'revision' AS kind, id, coalesce(text_content, '') AS content
             FROM message_revisions WHERE embedding IS NULL
@@ -118,23 +120,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             SELECT 'turn', id,
                    coalesce(user_prompt, '') || ' ' || coalesce(assistant_response, '')
             FROM turns WHERE embedding IS NULL
+            UNION ALL
+            SELECT 'chunk', id, coalesce(text_content, '')
+            FROM artifact_chunks WHERE embedding IS NULL
             LIMIT :limit
         """), {"limit": limit}))
         todo = [(k, r, c) for k, r, c in rows if c.strip()]
         if todo:
             vectors = embed_texts([c for _, _, c in todo], settings)
             for (kind, rid, _), vec in zip(todo, vectors):
-                table = "message_revisions" if kind == "revision" else "turns"
                 db.execute(sa_text(
-                    f"UPDATE {table} SET embedding = CAST(:v AS vector) WHERE id = :r"
-                ), {"v": to_pgvector(vec), "r": rid})
+                    f"UPDATE {tables[kind]} SET embedding = CAST(:v AS vector) "
+                    "WHERE id = :r"), {"v": to_pgvector(vec), "r": rid})
         # rows with empty content are skipped forever unless marked; stamp them
         for kind, rid, content in rows:
             if not content.strip():
-                table = "message_revisions" if kind == "revision" else "turns"
                 db.execute(sa_text(
-                    f"UPDATE {table} SET embedding = CAST(:v AS vector) WHERE id = :r"
-                ), {"v": "[" + ",".join(["0"] * 1024) + "]", "r": rid})
+                    f"UPDATE {tables[kind]} SET embedding = CAST(:v AS vector) "
+                    "WHERE id = :r"),
+                    {"v": "[" + ",".join(["0"] * 1024) + "]", "r": rid})
         db.commit()
         return {"embedded": len(todo), "scanned": len(rows)}
 

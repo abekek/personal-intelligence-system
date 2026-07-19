@@ -133,8 +133,13 @@ def _cmd_artifacts_scan(args: argparse.Namespace) -> int:
     root = Path(args.root).expanduser()
     manifest = {"root": str(root), "created": 0, "duplicate": 0,
                 "unsupported": 0, "errors": 0, "skipped_large": 0}
+    from pis.security.filenames import is_denied_filename
     for path in sorted(root.rglob("*")):
         if not path.is_file() or path.suffix.lower() not in SCAN_SUFFIXES:
+            continue
+        if is_denied_filename(path.name):
+            # never even read credential files, let alone upload them
+            manifest["denied"] = manifest.get("denied", 0) + 1
             continue
         size = path.stat().st_size
         if size == 0:
