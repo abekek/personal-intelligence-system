@@ -40,10 +40,26 @@ class ArtifactResult:
 
 def ingest_file(db: Session, store, data: bytes, filename: str,
                 source_meta: dict | None = None, embedder=None) -> ArtifactResult:
+    from sqlalchemy.exc import IntegrityError
+
     sha = hashlib.sha256(data).hexdigest()
     existing = db.scalar(select(ArtifactVersion).where(ArtifactVersion.sha256 == sha))
     if existing is not None:
         return ArtifactResult("duplicate", existing.artifact_id, existing.id)
+    try:
+        return _ingest_new(db, store, data, filename, sha, source_meta, embedder)
+    except IntegrityError:
+        # Client-retry race: a previous attempt finished server-side after
+        # the client timed out. The sha unique constraint makes this safe.
+        db.rollback()
+        existing = db.scalar(select(ArtifactVersion).where(ArtifactVersion.sha256 == sha))
+        if existing is not None:
+            return ArtifactResult("duplicate", existing.artifact_id, existing.id)
+        raise
+
+
+def _ingest_new(db: Session, store, data: bytes, filename: str, sha: str,
+                source_meta: dict | None, embedder) -> ArtifactResult:
 
     extraction = extract_text(data, filename)
     object_id = store.put(data)
