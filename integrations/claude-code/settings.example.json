@@ -10,6 +10,17 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/alibek/Desktop/Projects/personal-intelligence-system/integrations/claude-code/hooks/session_start_hook.py",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

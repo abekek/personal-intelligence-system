@@ -143,18 +143,25 @@ def _cmd_artifacts_scan(args: argparse.Namespace) -> int:
         if size > 25_000_000:
             manifest["skipped_large"] += 1
             continue
-        try:
-            response = httpx.post(
-                f"{args.api_url}/v1/artifacts", params={"filename": path.name},
-                content=path.read_bytes(),
-                headers={"Authorization": f"Bearer {args.token}"}, timeout=120.0,
-            )
-            response.raise_for_status()
-            status = response.json()["status"]
-            manifest[status] = manifest.get(status, 0) + 1
-        except Exception as exc:
+        last_exc = None
+        for attempt in range(3):  # transient 5xx/timeouts under load
+            try:
+                response = httpx.post(
+                    f"{args.api_url}/v1/artifacts", params={"filename": path.name},
+                    content=path.read_bytes(),
+                    headers={"Authorization": f"Bearer {args.token}"}, timeout=120.0,
+                )
+                response.raise_for_status()
+                status = response.json()["status"]
+                manifest[status] = manifest.get(status, 0) + 1
+                last_exc = None
+                break
+            except Exception as exc:
+                last_exc = exc
+                time.sleep(3 * (attempt + 1))
+        if last_exc is not None:
             manifest["errors"] += 1
-            print(f"error: {path}: {exc}", file=sys.stderr)
+            print(f"error: {path}: {last_exc}", file=sys.stderr)
     print(json.dumps(manifest, indent=2))
     return 0
 
