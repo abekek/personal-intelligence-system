@@ -75,9 +75,16 @@ def _extract_pdf(data: bytes) -> Extraction | None:
     try:
         reader = PdfReader(io.BytesIO(data))
         blocks = []
+        total = 0
         for page_number, page in enumerate(reader.pages, start=1):
+            # Stop parsing once the text budget is met: page.extract_text()
+            # is CPU-bound, and a few hundred pages of it starves health
+            # checks on the single-vCPU instance.
+            if total >= MAX_TEXT_CHARS:
+                break
             text = (page.extract_text() or "").strip()
             if text:
+                total += len(text)
                 blocks.append(ExtractedBlock(text, {"type": "page", "page": page_number}))
         return Extraction("pypdf", blocks)
     except Exception:
