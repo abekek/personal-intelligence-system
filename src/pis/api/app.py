@@ -175,6 +175,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         from pis.extraction.runner import run_extraction
         return run_extraction(session_factory, settings, limit=limit)
 
+    @app.post("/v1/admin/reset-extraction", dependencies=[Depends(require_token)])
+    def reset_extraction(min_chars: int = 12000, db: Session = Depends(db_session)):
+        """Re-queue conversations whose content exceeded one extraction window
+        (they were tail-sampled before windowed extraction existed)."""
+        result = db.execute(sa_text("""
+            UPDATE conversations SET extracted_at = NULL WHERE id IN (
+                SELECT m.conversation_id FROM messages m
+                JOIN message_revisions r ON r.message_id = m.id
+                GROUP BY m.conversation_id
+                HAVING sum(length(coalesce(r.text_content, ''))) > :mc)
+        """), {"mc": min_chars})
+        db.commit()
+        return {"requeued": result.rowcount}
+
     @app.get("/v1/context-pack", dependencies=[Depends(require_token)])
     def context_pack(topic: str, db: Session = Depends(db_session)):
         from pis.retrieval.search import build_context_pack

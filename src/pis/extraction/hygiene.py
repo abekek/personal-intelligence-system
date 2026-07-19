@@ -110,6 +110,19 @@ def supersede_batch(db: Session, llm, after: str = "", limit: int = 100) -> dict
                     "coalesce(supersedes_memory_id, :o) WHERE memory_id = :m"),
                     {"o": other_id, "m": memory_id})
                 superseded += 1
+            elif relation == "duplicate":
+                db.execute(sa_text("""
+                    INSERT INTO memory_evidence (id, memory_id, event_id, excerpt)
+                    SELECT 'evi_' || substr(md5(random()::text), 1, 16),
+                           CAST(:survivor AS varchar), e.event_id, e.excerpt
+                    FROM memory_evidence e WHERE e.memory_id = :absorbed
+                      AND e.event_id NOT IN (
+                        SELECT event_id FROM memory_evidence WHERE memory_id = :survivor)
+                """), {"survivor": memory_id, "absorbed": other_id})
+                db.execute(sa_text(
+                    "UPDATE memory_items SET status = 'superseded' "
+                    "WHERE memory_id = :m AND status = 'current'"), {"m": other_id})
+                superseded += 1
     db.commit()
     next_after = rows[-1][0] if len(rows) == limit else ""
     return {"scanned": len(rows), "superseded": superseded, "next_after": next_after}

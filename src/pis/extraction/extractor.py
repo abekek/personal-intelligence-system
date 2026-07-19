@@ -32,13 +32,16 @@ relation between an EXISTING memory and a NEW candidate memory about the same to
 Relations:
 - "supersedes": the NEW statement describes a later state of the same thing (progress, changed
   decision, updated status) — the EXISTING one is now stale.
+- "duplicate": both describe the SAME proposition (same activity/fact, merely reworded or with
+  minor detail differences) — keep one.
 - "distinct": both can be true simultaneously (different aspects, both worth keeping).
 
-Return STRICT JSON, no prose: [{"pair": <index>, "relation": "supersedes|distinct"}]
+Return STRICT JSON, no prose: [{"pair": <index>, "relation": "supersedes|duplicate|distinct"}]
 
 Pairs:
 {pairs}
 """
+MAX_WINDOWS = 6
 
 PROMPT = """You are extracting durable memory from a conversation for a personal knowledge system.
 
@@ -65,21 +68,30 @@ Conversation (title: {title}):
 """
 
 
-def build_prompt(title: str, messages: list[dict]) -> tuple[str, dict[str, str]]:
-    """messages: [{ref, role, text, event_id}] newest-last. Returns prompt and
-    ref->event_id map. Caps context to the most recent MAX_CONTEXT_CHARS."""
-    ref_map: dict[str, str] = {}
-    lines: list[str] = []
+def build_windows(title: str, messages: list[dict]) -> list[tuple[str, dict[str, str]]]:
+    """Split the conversation into consecutive <=MAX_CONTEXT_CHARS windows so
+    long sessions are mined in full, not tail-sampled. Returns up to
+    MAX_WINDOWS (prompt, ref->event_id) pairs, keeping the NEWEST windows
+    when capped."""
+    windows: list[list[dict]] = [[]]
     total = 0
-    for message in reversed(messages):
-        line = f"[{message['ref']}] {message['role']}: {message['text'][:2000]}"
-        if total + len(line) > MAX_CONTEXT_CHARS:
-            break
-        lines.append(line)
-        ref_map[message["ref"]] = message["event_id"]
-        total += len(line)
-    body = "\n".join(reversed(lines))
-    return PROMPT.replace("{title}", title or "untitled").replace("{body}", body), ref_map
+    for message in messages:
+        line_len = len(message["text"][:2000]) + 20
+        if total + line_len > MAX_CONTEXT_CHARS and windows[-1]:
+            windows.append([])
+            total = 0
+        windows[-1].append(message)
+        total += line_len
+    windows = [w for w in windows if w][-MAX_WINDOWS:]
+
+    out = []
+    for window in windows:
+        ref_map = {m["ref"]: m["event_id"] for m in window}
+        body = "\n".join(
+            f"[{m['ref']}] {m['role']}: {m['text'][:2000]}" for m in window)
+        prompt = PROMPT.replace("{title}", title or "untitled").replace("{body}", body)
+        out.append((prompt, ref_map))
+    return out
 
 
 def bedrock_llm(settings: Settings):
@@ -167,8 +179,9 @@ def classify_pairs(llm, pairs: list[tuple[str, str]]) -> list[str]:
         try:
             for verdict in json.loads(match.group(0)):
                 index = int(verdict.get("pair", -1))
-                if 0 <= index < len(pairs) and verdict.get("relation") == "supersedes":
-                    relations[index] = "supersedes"
+                relation = verdict.get("relation")
+                if 0 <= index < len(pairs) and relation in ("supersedes", "duplicate"):
+                    relations[index] = relation
         except (json.JSONDecodeError, TypeError, ValueError):
             pass
     return relations
@@ -206,8 +219,11 @@ def extract_conversation(db: Session, conversation_id: str, llm, embedder,
             "SELECT title, sensitivity FROM conversations WHERE id = :cid"),
             {"cid": conversation_id}).first()
         title, conv_sensitivity = (row[0] or "", row[1]) if row else ("", "confidential-personal")
-        prompt, ref_map = build_prompt(title, messages)
-        propositions = parse_propositions(llm(prompt))
+        propositions = []
+        ref_map: dict[str, str] = {}
+        for window_prompt, window_refs in build_windows(title, messages):
+            propositions.extend(parse_propositions(llm(window_prompt)))
+            ref_map.update(window_refs)
         counts["proposed"] = len(propositions)
         vectors = embedder([p["statement"] for p in propositions]) if propositions else []
 
@@ -242,7 +258,19 @@ def extract_conversation(db: Session, conversation_id: str, llm, embedder,
             proposition = entry["proposition"]
             supersedes_id = None
             if entry["conflict_with"] is not None:
-                if next(relation_iter, "distinct") == "supersedes":
+                relation = next(relation_iter, "distinct")
+                if relation == "duplicate":
+                    # same proposition, reworded — confirm + union evidence
+                    db.execute(sa_text(
+                        "UPDATE memory_items SET last_confirmed_at = :now, "
+                        "authority = CASE WHEN authority = 'observed' THEN "
+                        "'corroborated' ELSE authority END WHERE memory_id = :mid"),
+                        {"now": now, "mid": entry["conflict_with"]})
+                    _insert_evidence(db, entry["conflict_with"],
+                                     proposition["evidence"], ref_map, messages)
+                    counts["confirmed"] += 1
+                    continue
+                if relation == "supersedes":
                     supersedes_id = entry["conflict_with"]
             evidence_events = [ref_map.get(r) for r in proposition["evidence"]
                                if ref_map.get(r)]

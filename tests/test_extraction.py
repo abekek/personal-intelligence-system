@@ -44,6 +44,36 @@ PROP = {"kind": "decision",
         "confidence": 0.95, "evidence": ["m0", "m0", "m1"]}
 
 
+def test_windowed_extraction_covers_whole_conversation():
+    from pis.extraction.extractor import build_windows, MAX_CONTEXT_CHARS
+    messages = [{"ref": f"m{i}", "role": "user", "text": "x" * 3000,
+                 "event_id": f"evt_{i}", "capture_method": "claude_code_hook"}
+                for i in range(20)]  # ~60k chars -> multiple windows
+    windows = build_windows("t", messages)
+    assert len(windows) >= 4
+    covered = set()
+    for _, refs in windows:
+        covered.update(refs)
+    assert covered == {f"m{i}" for i in range(20)}  # nothing tail-sampled away
+    for prompt, _ in windows:
+        assert len(prompt) < MAX_CONTEXT_CHARS + 2000
+
+
+def test_duplicate_relation_confirms_instead_of_inserting(db):
+    conv_id = seed_transcript(db)
+    extract_conversation(db, conv_id, make_llm([{
+        "kind": "task", "statement": "Preparing the STORAGE submission carefully",
+        "confidence": 0.9, "evidence": ["m0"]}]), embedder)
+    db.execute(sa.text("UPDATE conversations SET extracted_at = NULL"))
+    db.commit()
+    counts = extract_conversation(db, conv_id, make_llm([{
+        "kind": "task", "statement": "Working on STORAGE submission preparation",
+        "confidence": 0.9, "evidence": ["m1"]}], relations=["duplicate"]), embedder)
+    assert counts["confirmed"] == 1 and counts["created"] == 0
+    assert db.execute(sa.text(
+        "SELECT count(*) FROM memory_items WHERE status = 'current'")).scalar() == 1
+
+
 def test_parse_propositions_salvage_and_validation():
     raw = 'ok:\n[{"kind": "decision", "statement": "Chose X", "confidence": 0.9, "evidence": ["m0"]}, {"kind": "junk", "statement": "drop"}]'
     assert len(parse_propositions(raw)) == 1
