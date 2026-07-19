@@ -161,7 +161,25 @@ def build_context_pack(db: Session, topic: str, query_vec: str | None,
     """Assembled current knowledge about a topic: memories with provenance,
     plus the most relevant raw conversations."""
     hits = search_hybrid(db, topic, query_vec, limit=30)
-    memory_ids = [h.ref_id for h in hits if h.kind == "memory"][:limit]
+    # Memories are retrieved directly — they must never lose ranking fights
+    # against the raw messages they were distilled from.
+    memory_ids: list[str] = []
+    if query_vec is not None:
+        for (memory_id,) in db.execute(text("""
+            SELECT memory_id FROM memory_items
+            WHERE status = 'current' AND embedding IS NOT NULL
+            ORDER BY embedding <=> CAST(:vec AS vector) LIMIT :limit
+        """), {"vec": query_vec, "limit": limit}):
+            memory_ids.append(memory_id)
+    for (memory_id,) in db.execute(text("""
+        SELECT memory_id FROM memory_items
+        WHERE status = 'current' AND tsv @@ websearch_to_tsquery('english', :q)
+        ORDER BY ts_rank(tsv, websearch_to_tsquery('english', :q)) DESC
+        LIMIT :limit
+    """), {"q": topic, "limit": limit}):
+        if memory_id not in memory_ids:
+            memory_ids.append(memory_id)
+    memory_ids = memory_ids[:limit]
     memories = []
     for memory_id in memory_ids:
         row = db.execute(text("""
