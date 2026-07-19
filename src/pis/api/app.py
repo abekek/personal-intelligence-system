@@ -175,6 +175,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         from pis.extraction.runner import run_extraction
         return run_extraction(session_factory, settings, limit=limit)
 
+    @app.post("/v1/admin/rescrub-chunks", dependencies=[Depends(require_token)])
+    def rescrub_chunks(db: Session = Depends(db_session)):
+        """Re-apply the current secret scanner to stored artifact chunks.
+        Chunks are projections, so tightening a redaction pattern may be
+        applied retroactively; changed chunks drop their embedding."""
+        from pis.security.secrets import redact_text
+        changed = 0
+        for chunk_id, content in db.execute(sa_text(
+                "SELECT id, text_content FROM artifact_chunks "
+                "WHERE text_content IS NOT NULL")):
+            redacted = redact_text(content)
+            if redacted != content:
+                db.execute(sa_text(
+                    "UPDATE artifact_chunks SET text_content = :t, "
+                    "embedding = NULL WHERE id = :i"),
+                    {"t": redacted, "i": chunk_id})
+                changed += 1
+        db.commit()
+        return {"rescrubbed": changed}
+
     @app.post("/v1/admin/assign-projects", dependencies=[Depends(require_token)])
     def assign_projects(db: Session = Depends(db_session)):
         """Backfill memory project attribution from source code sessions

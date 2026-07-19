@@ -28,3 +28,15 @@ def test_redact_replaces_span():
     assert "AKIAIOSFODNN7EXAMPLE" not in out
     assert "[REDACTED:aws_access_key]" in out
     assert out.startswith("key is ") and out.endswith(" ok")
+
+
+def test_aws_secret_key_redacted_with_context():
+    secret = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    csv = f"Access key ID,Secret access key\nAKIAIOSFODNN7EXAMPLE,{secret}"
+    out = redact_text(csv)
+    assert secret not in out and "[REDACTED:aws_secret_key]" in out
+
+
+def test_bare_40char_token_not_flagged_without_context():
+    # a git sha-ish/base64 token alone must not trip the AWS heuristic
+    assert scan_text("blob id Q7abcdefghijklmnopqrstuvwxyzABCDEFGHIJ done") == []
