@@ -105,6 +105,39 @@ def build_mcp(settings: Settings, session_factory, policy: PolicyEngine) -> Fast
                     for cid, provider, title, updated in rows]
 
     @mcp.tool()
+    def kb_confirm_memory(memory_id: str) -> dict:
+        """Confirm a memory as true (user_confirmed authority — the top tier).
+        Use when the user validates something from kb_search or a context
+        pack, e.g. "yes that's right"."""
+        from pis.curation import confirm_memory
+        with session_factory() as db:
+            return confirm_memory(db, memory_id)
+
+    @mcp.tool()
+    def kb_correct_memory(memory_id: str, corrected_statement: str,
+                          note: str = "") -> dict:
+        """Replace a wrong memory with the user's correction. The old memory
+        is superseded (kept, hidden); the correction becomes a user_confirmed
+        memory with its own ledger evidence. Use when the user says a served
+        memory is wrong/outdated and states the truth."""
+        from pis.curation import correct_memory
+        embedder = None
+        if settings.embeddings_enabled:
+            from pis.embeddings import embed_texts
+            embedder = lambda texts: embed_texts(texts, settings)  # noqa: E731
+        with session_factory() as db:
+            return correct_memory(db, settings, policy, memory_id,
+                                  corrected_statement, note, embedder)
+
+    @mcp.tool()
+    def kb_retract_memory(memory_id: str, reason: str = "") -> dict:
+        """Hide a memory from all retrieval (kept in storage, never deleted).
+        Use when the user says "forget this" about a served memory."""
+        from pis.curation import retract_memory
+        with session_factory() as db:
+            return retract_memory(db, memory_id, reason)
+
+    @mcp.tool()
     def kb_get_context_pack(topic: str) -> dict:
         """Assembled current knowledge about a topic: distilled memories
         (decisions, facts, results — each with evidence ids) plus the most
