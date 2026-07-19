@@ -163,17 +163,24 @@ def build_context_pack(db: Session, topic: str, query_vec: str | None,
     hits = search_hybrid(db, topic, query_vec, limit=30)
     # Memories are retrieved directly — they must never lose ranking fights
     # against the raw messages they were distilled from.
+    # Centrality gate: a memory must be ABOUT the topic, not merely co-occur
+    # with it; higher-sensitivity memories need a closer match to surface.
     memory_ids: list[str] = []
     if query_vec is not None:
-        for (memory_id,) in db.execute(text("""
-            SELECT memory_id FROM memory_items
-            WHERE status = 'current' AND embedding IS NOT NULL
+        for memory_id, similarity, sensitivity in db.execute(text("""
+            SELECT memory_id, 1 - (embedding <=> CAST(:vec AS vector)), sensitivity
+            FROM memory_items
+            WHERE status = 'current' AND authority != 'asserted'
+              AND embedding IS NOT NULL
             ORDER BY embedding <=> CAST(:vec AS vector) LIMIT :limit
-        """), {"vec": query_vec, "limit": limit}):
-            memory_ids.append(memory_id)
+        """), {"vec": query_vec, "limit": limit * 2}):
+            floor = 0.60 if sensitivity == "highly-sensitive" else 0.45
+            if similarity >= floor:
+                memory_ids.append(memory_id)
     for (memory_id,) in db.execute(text("""
         SELECT memory_id FROM memory_items
-        WHERE status = 'current' AND tsv @@ websearch_to_tsquery('english', :q)
+        WHERE status = 'current' AND authority != 'asserted'
+          AND tsv @@ websearch_to_tsquery('english', :q)
         ORDER BY ts_rank(tsv, websearch_to_tsquery('english', :q)) DESC
         LIMIT :limit
     """), {"q": topic, "limit": limit}):

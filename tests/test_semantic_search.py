@@ -18,13 +18,19 @@ TOPICS = ["storage", "visa", "misc"]
 
 
 def fake_embed(texts, settings):
+    """Deterministic embeddings with three similarity tiers:
+    identical first-4-words -> ~0.999 (merge band); same topic -> ~0.83
+    (conflict band); different topic -> ~0 (unrelated)."""
     vectors = []
     for text in texts:
         topic = next((t for t in TOPICS if t in text.lower()), "misc")
         base = [0.0] * DIMENSIONS
         base[TOPICS.index(topic)] = 1.0
-        jitter = int(hashlib.sha256(text.encode()).hexdigest()[:4], 16) / 65535 * 0.01
-        base[10] = jitter
+        key4 = " ".join(text.lower().split()[:4])
+        d4 = 100 + int(hashlib.sha256(key4.encode()).hexdigest()[:4], 16) % 400
+        base[d4] += 0.45
+        dfull = 500 + int(hashlib.sha256(text.encode()).hexdigest()[:4], 16) % 400
+        base[dfull] += 0.01
         vectors.append(base)
     return vectors
 

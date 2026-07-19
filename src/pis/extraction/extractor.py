@@ -17,11 +17,28 @@ from sqlalchemy.orm import Session
 
 from pis.config import Settings
 
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"
 MAX_CONTEXT_CHARS = 12000
 KINDS = {"fact", "decision", "claim", "result", "task", "open_question",
          "preference", "risk"}
-DEDUP_SIMILARITY = 0.90
+# >= MERGE: same proposition — confirm existing + union evidence.
+# [CONFLICT, MERGE): same topic — ask the LLM whether the new one supersedes.
+MERGE_SIMILARITY = 0.86
+CONFLICT_SIMILARITY = 0.70
+
+CONTRADICTION_PROMPT = """You maintain a personal memory store. For each pair below, decide the
+relation between an EXISTING memory and a NEW candidate memory about the same topic.
+
+Relations:
+- "supersedes": the NEW statement describes a later state of the same thing (progress, changed
+  decision, updated status) — the EXISTING one is now stale.
+- "distinct": both can be true simultaneously (different aspects, both worth keeping).
+
+Return STRICT JSON, no prose: [{"pair": <index>, "relation": "supersedes|distinct"}]
+
+Pairs:
+{pairs}
+"""
 
 PROMPT = """You are extracting durable memory from a conversation for a personal knowledge system.
 
@@ -105,12 +122,56 @@ def parse_propositions(raw: str) -> list[dict]:
 
 def conversation_messages(db: Session, conversation_id: str) -> list[dict]:
     rows = db.execute(sa_text("""
-        SELECT m.role, r.text_content, r.event_id
-        FROM messages m JOIN message_revisions r ON r.message_id = m.id
+        SELECT m.role, r.text_content, r.event_id, e.capture_method
+        FROM messages m
+        JOIN message_revisions r ON r.message_id = m.id
+        JOIN events e ON e.event_id = r.event_id
         WHERE m.conversation_id = :cid ORDER BY m.position
     """), {"cid": conversation_id})
-    return [{"ref": f"m{i}", "role": role, "text": content or "", "event_id": event_id}
-            for i, (role, content, event_id) in enumerate(rows)]
+    return [{"ref": f"m{i}", "role": role, "text": content or "",
+             "event_id": event_id, "capture_method": capture_method}
+            for i, (role, content, event_id, capture_method) in enumerate(rows)]
+
+
+def _insert_evidence(db: Session, memory_id: str, refs: list[str],
+                     ref_map: dict, messages: list[dict]) -> None:
+    for ref in dict.fromkeys(refs):  # de-duplicated, order preserved
+        event_id = ref_map.get(ref)
+        if not event_id:
+            continue
+        exists = db.execute(sa_text(
+            "SELECT 1 FROM memory_evidence WHERE memory_id = :m AND event_id = :e"),
+            {"m": memory_id, "e": event_id}).first()
+        if exists:
+            continue
+        excerpt = next((m["text"][:300] for m in messages if m["ref"] == ref), None)
+        db.execute(sa_text(
+            "INSERT INTO memory_evidence (id, memory_id, event_id, excerpt) "
+            "VALUES (:id, :mid, :eid, :ex)"),
+            {"id": "evi_" + uuid.uuid4().hex[:16], "mid": memory_id,
+             "eid": event_id, "ex": excerpt})
+
+
+def classify_pairs(llm, pairs: list[tuple[str, str]]) -> list[str]:
+    """pairs: [(existing_statement, new_statement)] -> relations list."""
+    if not pairs:
+        return []
+    body = "\n".join(
+        f'{i}. EXISTING: "{old}"\n   NEW: "{new}"'
+        for i, (old, new) in enumerate(pairs)
+    )
+    raw = llm(CONTRADICTION_PROMPT.replace("{pairs}", body))
+    relations = ["distinct"] * len(pairs)
+    match = re.search(r"\[.*\]", raw, re.DOTALL)
+    if match:
+        try:
+            for verdict in json.loads(match.group(0)):
+                index = int(verdict.get("pair", -1))
+                if 0 <= index < len(pairs) and verdict.get("relation") == "supersedes":
+                    relations[index] = "supersedes"
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+    return relations
 
 
 def _find_similar(db: Session, vec_literal: str) -> tuple[str, float] | None:
@@ -124,54 +185,92 @@ def _find_similar(db: Session, vec_literal: str) -> tuple[str, float] | None:
 
 def extract_conversation(db: Session, conversation_id: str, llm, embedder,
                          run_id: str | None = None) -> dict:
-    """Returns {proposed, created, confirmed}."""
+    """Returns {proposed, created, confirmed, superseded, skipped_notes}."""
     from pis.embeddings import to_pgvector
 
     messages = conversation_messages(db, conversation_id)
-    counts = {"proposed": 0, "created": 0, "confirmed": 0}
+    counts = {"proposed": 0, "created": 0, "confirmed": 0,
+              "superseded": 0, "skipped_notes": 0}
     now = datetime.now(timezone.utc)
+
+    # Capture-note streams already ARE curated memory statements — mining
+    # them again would launder assertions into observed facts.
+    all_manual = bool(messages) and all(
+        m["capture_method"] == "manual" for m in messages)
+    if all_manual:
+        counts["skipped_notes"] = 1
+        messages = []
+
     if messages:
-        title = db.execute(sa_text(
-            "SELECT title FROM conversations WHERE id = :cid"),
-            {"cid": conversation_id}).scalar() or ""
+        row = db.execute(sa_text(
+            "SELECT title, sensitivity FROM conversations WHERE id = :cid"),
+            {"cid": conversation_id}).first()
+        title, conv_sensitivity = (row[0] or "", row[1]) if row else ("", "confidential-personal")
         prompt, ref_map = build_prompt(title, messages)
         propositions = parse_propositions(llm(prompt))
         counts["proposed"] = len(propositions)
         vectors = embedder([p["statement"] for p in propositions]) if propositions else []
+
+        pending: list[dict] = []       # inserted after conflict classification
+        conflict_pairs: list[tuple[str, str]] = []
         for proposition, vec in zip(propositions, vectors):
             vec_literal = to_pgvector(vec)
             similar = _find_similar(db, vec_literal)
-            if similar and similar[1] >= DEDUP_SIMILARITY:
+            if similar and similar[1] >= MERGE_SIMILARITY:
                 db.execute(sa_text(
                     "UPDATE memory_items SET last_confirmed_at = :now, "
                     "authority = CASE WHEN authority = 'observed' THEN 'corroborated' "
                     "ELSE authority END WHERE memory_id = :mid"),
                     {"now": now, "mid": similar[0]})
+                _insert_evidence(db, similar[0], proposition["evidence"], ref_map, messages)
                 counts["confirmed"] += 1
                 continue
+            entry = {"proposition": proposition, "vec": vec_literal,
+                     "conflict_with": None}
+            if similar and similar[1] >= CONFLICT_SIMILARITY:
+                old_statement = db.execute(sa_text(
+                    "SELECT statement FROM memory_items WHERE memory_id = :m "
+                    "AND status = 'current'"), {"m": similar[0]}).scalar()
+                if old_statement:
+                    entry["conflict_with"] = similar[0]
+                    conflict_pairs.append((old_statement, proposition["statement"]))
+            pending.append(entry)
+
+        relations = classify_pairs(llm, conflict_pairs)
+        relation_iter = iter(relations)
+        for entry in pending:
+            proposition = entry["proposition"]
+            supersedes_id = None
+            if entry["conflict_with"] is not None:
+                if next(relation_iter, "distinct") == "supersedes":
+                    supersedes_id = entry["conflict_with"]
+            evidence_events = [ref_map.get(r) for r in proposition["evidence"]
+                               if ref_map.get(r)]
+            manual_only = bool(evidence_events) and all(
+                next((m["capture_method"] for m in messages
+                      if m["event_id"] == eid), "") == "manual"
+                for eid in evidence_events)
+            authority = "asserted" if manual_only else "observed"
+
             memory_id = "mem_" + uuid.uuid4().hex[:16]
             db.execute(sa_text("""
                 INSERT INTO memory_items (memory_id, kind, statement, project_id,
                     status, authority, confidence, first_observed_at,
-                    last_confirmed_at, sensitivity, extraction_run_id,
-                    source_conversation_id, embedding)
-                VALUES (:mid, :kind, :stmt, NULL, 'current', 'observed', :conf,
-                    :now, :now, 'confidential-personal', :run, :cid,
-                    CAST(:vec AS vector))
+                    last_confirmed_at, sensitivity, supersedes_memory_id,
+                    extraction_run_id, source_conversation_id, embedding)
+                VALUES (:mid, :kind, :stmt, NULL, 'current', :auth, :conf,
+                    :now, :now, :sens, :sup, :run, :cid, CAST(:vec AS vector))
             """), {"mid": memory_id, "kind": proposition["kind"],
-                   "stmt": proposition["statement"], "conf": proposition["confidence"],
-                   "now": now, "run": run_id, "cid": conversation_id,
-                   "vec": vec_literal})
-            for ref in proposition["evidence"]:
-                event_id = ref_map.get(ref)
-                if event_id:
-                    excerpt = next((m["text"][:300] for m in messages
-                                    if m["ref"] == ref), None)
-                    db.execute(sa_text(
-                        "INSERT INTO memory_evidence (id, memory_id, event_id, excerpt) "
-                        "VALUES (:id, :mid, :eid, :ex)"),
-                        {"id": "evi_" + uuid.uuid4().hex[:16], "mid": memory_id,
-                         "eid": event_id, "ex": excerpt})
+                   "stmt": proposition["statement"], "auth": authority,
+                   "conf": proposition["confidence"], "now": now,
+                   "sens": conv_sensitivity, "sup": supersedes_id,
+                   "run": run_id, "cid": conversation_id, "vec": entry["vec"]})
+            if supersedes_id:
+                db.execute(sa_text(
+                    "UPDATE memory_items SET status = 'superseded' "
+                    "WHERE memory_id = :m"), {"m": supersedes_id})
+                counts["superseded"] += 1
+            _insert_evidence(db, memory_id, proposition["evidence"], ref_map, messages)
             counts["created"] += 1
     db.execute(sa_text(
         "UPDATE conversations SET extracted_at = :now WHERE id = :cid"),

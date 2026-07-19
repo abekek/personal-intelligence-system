@@ -28,7 +28,9 @@ def engine():
 
 @pytest.fixture
 def db(engine):
-    tables = ", ".join(t.name for t in Base.metadata.sorted_tables)
+    # migration-only tables (not in Base.metadata) must be truncated too
+    extra = ["memory_items", "memory_evidence", "extraction_runs"]
+    tables = ", ".join([t.name for t in Base.metadata.sorted_tables] + extra)
     with engine.begin() as conn:
         conn.execute(sa.text(f"TRUNCATE {tables} RESTART IDENTITY CASCADE"))
     with Session(engine, expire_on_commit=False) as session:

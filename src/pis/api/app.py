@@ -186,6 +186,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         db.commit()
         return {"processed": len(conversation_ids), "remaining": remaining, **totals}
 
+    @app.post("/v1/admin/memory-hygiene", dependencies=[Depends(require_token)])
+    def memory_hygiene(stage: str, after: str = "", limit: int = 300,
+                       db: Session = Depends(db_session)):
+        from pis.extraction import hygiene
+        if stage == "evidence":
+            return {"stage": stage, "deduped": hygiene.dedup_evidence(db)}
+        if stage == "retract-notes":
+            return {"stage": stage, "retracted": hygiene.retract_note_only(db)}
+        if stage == "merge":
+            return {"stage": stage, **hygiene.merge_batch(db, after, limit)}
+        if stage == "supersede":
+            from pis.extraction.extractor import bedrock_llm
+            return {"stage": stage,
+                    **hygiene.supersede_batch(db, bedrock_llm(settings), after, limit)}
+        raise HTTPException(status_code=400, detail="unknown stage")
+
     @app.post("/v1/artifacts", dependencies=[Depends(require_token)])
     async def upload_artifact(request: Request, filename: str,
                               conversation_uuid: str = "",
