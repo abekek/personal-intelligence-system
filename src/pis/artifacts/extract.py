@@ -10,10 +10,18 @@ TEXT_SUFFIXES = {
 }
 
 
+def _clean(text: str) -> str:
+    # Postgres text columns reject NUL bytes; some PDF extractions contain them
+    return text.replace("\x00", "")
+
+
 @dataclass
 class ExtractedBlock:
     text: str
     locator: dict
+
+    def __post_init__(self):
+        self.text = _clean(self.text)
 
 
 @dataclass

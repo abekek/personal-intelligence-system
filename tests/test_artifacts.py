@@ -14,6 +14,13 @@ def test_extract_plain_and_chunking():
     assert chunks[1].locator["part"] == 1
 
 
+def test_nul_bytes_sanitized(db, tmp_path):
+    from pis.storage.objects import ObjectStore
+    payload = ("evidence checklist item\x00with embedded NUL " * 40).encode()
+    result = ingest_file(db, ObjectStore(tmp_path), payload, "weird.txt")
+    assert result.status == "created" and result.chunks >= 1
+
+
 def test_extract_unsupported_returns_none():
     assert extract_text(b"\x00\x01binary", "image.png") is None
 
