@@ -51,7 +51,7 @@ Read the full walkthrough in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 Python 3.12 · FastAPI · PostgreSQL 16 + pgvector · SQLAlchemy 2 + Alembic ·
 MCP Python SDK · AWS (App Runner, RDS, S3, Secrets Manager, Bedrock via CDK) ·
-pytest (95 tests)
+pytest (107 tests)
 
 Runs for roughly **$40/month** on AWS, or entirely locally with Docker.
 
@@ -61,7 +61,7 @@ Runs for roughly **$40/month** on AWS, or entirely locally with Docker.
 docker compose up -d postgres     # pgvector-enabled Postgres
 uv sync
 uv run alembic upgrade head
-uv run pytest -q                  # 95 tests
+uv run pytest -q                  # 107 tests
 uv run python -m pis.api          # API on 127.0.0.1:8800
 ```
 
@@ -119,8 +119,10 @@ in the ledger automatically.
 ## Status & roadmap
 
 Working today: capture (Claude Code + claude.ai), historical import, hybrid
-semantic search, document ingestion, MCP connector, session↔commit linking.
+semantic search, document ingestion, MCP connector, session↔commit linking,
+LLM memory extraction (conversations distilled into typed propositions with
+evidence, supersession and dedup), topic context packs, auto-extraction
+scheduler, and session-start context injection into Claude Code.
 
-Next: LLM-based memory extraction (distilling history into decisions, claims
-and per-project context packs), curation workflow, artifact binary
-resolution, isolated finance vault.
+Next: curation workflow (promoting memories to user-confirmed), artifact
+binary resolution, golden retrieval evaluations, isolated finance vault.
