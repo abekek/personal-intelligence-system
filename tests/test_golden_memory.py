@@ -118,6 +118,30 @@ def test_golden_sensitivity_floor(db):
     assert "mem_g4_sensitive" not in ids_in_pack  # 0.5 < 0.60 sensitive floor
 
 
+# G6 — observer contamination: memories mined from the system's own dev
+# sessions never appear in unrelated packs, but do when the topic is about
+# the system itself.
+def test_golden_observer_contamination(db):
+    from pis.embeddings import DIMENSIONS
+    axis = [0.0] * DIMENSIONS
+    axis[0] = 1.0
+    db.execute(sa.text("""
+        INSERT INTO memory_items (memory_id, kind, statement, project_id,
+            status, authority, confidence, first_observed_at,
+            last_confirmed_at, sensitivity, embedding)
+        VALUES ('mem_g6_meta', 'result',
+                'Acceptance criteria for the pack QA all passed',
+                'personal-intelligence-system', 'current', 'observed', 0.9,
+                now(), now(), 'confidential-personal', CAST(:v AS vector))
+    """), {"v": to_pgvector(axis)})
+    db.commit()
+    query = to_pgvector(axis)  # perfectly similar — would rank #1 without gate
+    pack = build_context_pack(db, "the npj paper status", query)
+    assert "mem_g6_meta" not in [m["memory_id"] for m in pack["memories"]]
+    meta_pack = build_context_pack(db, "personal-intelligence ledger QA", query)
+    assert "mem_g6_meta" in [m["memory_id"] for m in meta_pack["memories"]]
+
+
 # G5 — curation: corrections supersede and outrank; retraction hides;
 # nothing is deleted.
 def test_golden_curation_flow(db):

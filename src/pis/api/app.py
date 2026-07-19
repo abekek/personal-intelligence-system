@@ -175,6 +175,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         from pis.extraction.runner import run_extraction
         return run_extraction(session_factory, settings, limit=limit)
 
+    @app.post("/v1/admin/assign-projects", dependencies=[Depends(require_token)])
+    def assign_projects(db: Session = Depends(db_session)):
+        """Backfill memory project attribution from source code sessions
+        (observer-contamination gate for pre-existing memories)."""
+        result = db.execute(sa_text("""
+            UPDATE memory_items mi SET project_id = sub.repo FROM (
+                SELECT c.id AS conv_id,
+                       regexp_replace(s.repo_root, '.*/', '') AS repo
+                FROM conversations c
+                JOIN code_sessions s ON s.session_id = c.provider_conversation_id
+                WHERE s.repo_root IS NOT NULL
+            ) sub
+            WHERE mi.source_conversation_id = sub.conv_id
+              AND mi.project_id IS NULL
+        """))
+        db.commit()
+        return {"assigned": result.rowcount}
+
     @app.post("/v1/admin/reset-extraction", dependencies=[Depends(require_token)])
     def reset_extraction(min_chars: int = 12000, db: Session = Depends(db_session)):
         """Re-queue conversations whose content exceeded one extraction window

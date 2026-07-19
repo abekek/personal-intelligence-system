@@ -215,10 +215,16 @@ def extract_conversation(db: Session, conversation_id: str, llm, embedder,
         messages = []
 
     if messages:
-        row = db.execute(sa_text(
-            "SELECT title, sensitivity FROM conversations WHERE id = :cid"),
+        row = db.execute(sa_text("""
+            SELECT c.title, c.sensitivity,
+                   regexp_replace(s.repo_root, '.*/', '') AS repo
+            FROM conversations c
+            LEFT JOIN code_sessions s ON s.session_id = c.provider_conversation_id
+            WHERE c.id = :cid"""),
             {"cid": conversation_id}).first()
-        title, conv_sensitivity = (row[0] or "", row[1]) if row else ("", "confidential-personal")
+        title, conv_sensitivity, project_id = (
+            (row[0] or "", row[1], row[2]) if row
+            else ("", "confidential-personal", None))
         propositions = []
         ref_map: dict[str, str] = {}
         for window_prompt, window_refs in build_windows(title, messages):
@@ -286,9 +292,10 @@ def extract_conversation(db: Session, conversation_id: str, llm, embedder,
                     status, authority, confidence, first_observed_at,
                     last_confirmed_at, sensitivity, supersedes_memory_id,
                     extraction_run_id, source_conversation_id, embedding)
-                VALUES (:mid, :kind, :stmt, NULL, 'current', :auth, :conf,
+                VALUES (:mid, :kind, :stmt, :proj, 'current', :auth, :conf,
                     :now, :now, :sens, :sup, :run, :cid, CAST(:vec AS vector))
             """), {"mid": memory_id, "kind": proposition["kind"],
+                   "proj": project_id,
                    "stmt": proposition["statement"], "auth": authority,
                    "conf": proposition["confidence"], "now": now,
                    "sens": conv_sensitivity, "sup": supersedes_id,

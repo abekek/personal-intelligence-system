@@ -156,6 +156,22 @@ def search_semantic(db: Session, query_vec: str, limit: int = 20) -> list[Search
     return hits[:limit]
 
 
+# Observer-contamination gate: memories mined from the system's own
+# development sessions are excluded from packs unless the topic is about
+# the system itself. (The evidence is primary, so authority gating cannot
+# catch this — project scoping can.)
+META_PROJECTS = ("personal-intelligence-system",)
+META_TOPIC_HINTS = ("personal-intelligence", "ledger", "memory system",
+                    "knowledge system", "pis", "mcp connector", "context pack")
+
+
+def _meta_filter_sql(topic: str) -> str:
+    if any(hint in topic.lower() for hint in META_TOPIC_HINTS):
+        return ""  # topic is about the system — meta memories are fair game
+    projects = ", ".join(f"'{p}'" for p in META_PROJECTS)
+    return f" AND (project_id IS NULL OR project_id NOT IN ({projects}))"
+
+
 def build_context_pack(db: Session, topic: str, query_vec: str | None,
                        limit: int = 12) -> dict:
     """Assembled current knowledge about a topic: memories with provenance,
@@ -165,22 +181,23 @@ def build_context_pack(db: Session, topic: str, query_vec: str | None,
     # against the raw messages they were distilled from.
     # Centrality gate: a memory must be ABOUT the topic, not merely co-occur
     # with it; higher-sensitivity memories need a closer match to surface.
+    meta_filter = _meta_filter_sql(topic)
     memory_ids: list[str] = []
     if query_vec is not None:
-        for memory_id, similarity, sensitivity in db.execute(text("""
+        for memory_id, similarity, sensitivity in db.execute(text(f"""
             SELECT memory_id, 1 - (embedding <=> CAST(:vec AS vector)), sensitivity
             FROM memory_items
             WHERE status = 'current' AND authority != 'asserted'
-              AND embedding IS NOT NULL
+              AND embedding IS NOT NULL{meta_filter}
             ORDER BY embedding <=> CAST(:vec AS vector) LIMIT :limit
         """), {"vec": query_vec, "limit": limit * 2}):
             floor = 0.60 if sensitivity == "highly-sensitive" else 0.45
             if similarity >= floor:
                 memory_ids.append(memory_id)
-    for (memory_id,) in db.execute(text("""
+    for (memory_id,) in db.execute(text(f"""
         SELECT memory_id FROM memory_items
         WHERE status = 'current' AND authority != 'asserted'
-          AND tsv @@ websearch_to_tsquery('english', :q)
+          AND tsv @@ websearch_to_tsquery('english', :q){meta_filter}
         ORDER BY ts_rank(tsv, websearch_to_tsquery('english', :q)) DESC
         LIMIT :limit
     """), {"q": topic, "limit": limit}):
