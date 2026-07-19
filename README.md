@@ -10,38 +10,7 @@ The core idea: your most valuable knowledge isn't in your file system — it's
 in your conversations. This system treats every AI conversation as a
 first-class, permanent, queryable record.
 
-```mermaid
-flowchart LR
-    subgraph Capture["Capture (local)"]
-        CC[Claude Code<br/>Stop hook]
-        DAEMON[Capture daemon<br/>+ SQLite outbox]
-        CLI[Import CLI<br/>exports & folders]
-    end
-
-    subgraph Cloud["Core (AWS)"]
-        API[FastAPI service]
-        LEDGER[(Immutable<br/>event ledger)]
-        PROJ[(Projections:<br/>conversations, turns,<br/>documents)]
-        S3[(S3 object store)]
-        BR[Bedrock<br/>embeddings]
-    end
-
-    subgraph Access
-        MCP[MCP connector<br/>OAuth 2.1]
-        CLAUDE[claude.ai<br/>web + mobile]
-        TERM[Terminal / API]
-    end
-
-    CC --> DAEMON --> API
-    CLI --> API
-    GH[GitHub webhooks] --> API
-    API --> LEDGER --> PROJ
-    API --> S3
-    PROJ <--> BR
-    MCP --> API
-    CLAUDE --> MCP
-    TERM --> API
-```
+![System design](docs/assets/system-design-poster.png)
 
 ## What it does
 
@@ -77,12 +46,6 @@ vector search over the projections. The MCP layer is a thin adapter: every
 tool wraps a retrieval or ingestion function 1:1.
 
 Read the full walkthrough in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-
-## System design poster
-
-Use the claude_design MCP (`https://api.anthropic.com/v1/design/mcp`, auth via
-`/design-login`) to import this project's design poster:
-[System Design Poster v2](https://claude.ai/design/p/fc1f3006-25ee-424e-8d39-dd6a906876d9?file=System+Design+Poster+v2.dc.html)
 
 ## Stack
 
