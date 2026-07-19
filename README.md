@@ -78,6 +78,12 @@ tool wraps a retrieval or ingestion function 1:1.
 
 Read the full walkthrough in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+## System design poster
+
+Use the claude_design MCP (`https://api.anthropic.com/v1/design/mcp`, auth via
+`/design-login`) to import this project's design poster:
+[System Design Poster v2](https://claude.ai/design/p/fc1f3006-25ee-424e-8d39-dd6a906876d9?file=System+Design+Poster+v2.dc.html)
+
 ## Stack
 
 Python 3.12 · FastAPI · PostgreSQL 16 + pgvector · SQLAlchemy 2 + Alembic ·
