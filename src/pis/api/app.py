@@ -179,6 +179,53 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         from pis.extraction.runner import run_extraction
         return run_extraction(session_factory, settings, limit=limit)
 
+    @app.get("/v1/admin/stream-stats", dependencies=[Depends(require_token)])
+    def stream_stats(db: Session = Depends(db_session)):
+        """Content-free structural aggregates of the ledger, for external
+        benchmark-representativeness comparison (counts and length
+        statistics only — no text leaves the system)."""
+        def one(sql: str) -> dict:
+            row = db.execute(sa_text(sql)).first()
+            return dict(row._mapping) if row else {}
+        return {
+            "conversations": one("""
+                SELECT count(*) AS n FROM conversations"""),
+            "messages_per_conversation": one("""
+                SELECT avg(c)::float AS mean,
+                       percentile_cont(0.5) WITHIN GROUP (ORDER BY c) AS p50,
+                       percentile_cont(0.9) WITHIN GROUP (ORDER BY c) AS p90
+                FROM (SELECT count(*) AS c FROM messages
+                      GROUP BY conversation_id) t"""),
+            "message_length_chars": one("""
+                SELECT avg(length(text_content))::float AS mean,
+                       percentile_cont(0.5) WITHIN GROUP
+                           (ORDER BY length(text_content)) AS p50
+                FROM message_revisions WHERE text_content IS NOT NULL"""),
+            "assistant_message_share": one("""
+                SELECT avg((role = 'assistant')::int)::float AS share
+                FROM messages"""),
+            "note_conversation_share": one("""
+                SELECT avg((provider_conversation_id LIKE 'note%%'
+                            OR title ILIKE '%%note%%')::int)::float AS share
+                FROM conversations"""),
+            "memories_per_extracted_conversation": one("""
+                SELECT count(*)::float /
+                       nullif((SELECT count(*) FROM conversations
+                               WHERE extracted_at IS NOT NULL), 0) AS yield
+                FROM memory_items"""),
+            "conversation_span_days": one("""
+                SELECT avg(d)::float AS mean,
+                       percentile_cont(0.5) WITHIN GROUP (ORDER BY d) AS p50
+                FROM (SELECT extract(epoch FROM max(m.created_at)
+                             - min(m.created_at)) / 86400.0 AS d
+                      FROM messages m GROUP BY conversation_id) t"""),
+            "sensitive_conversation_share": one("""
+                SELECT avg((sensitivity IN
+                            ('highly-sensitive','sensitive'))::int)::float
+                       AS share
+                FROM conversations"""),
+        }
+
     @app.post("/v1/admin/rescrub-chunks", dependencies=[Depends(require_token)])
     def rescrub_chunks(db: Session = Depends(db_session)):
         """Re-apply the current secret scanner to stored artifact chunks.
